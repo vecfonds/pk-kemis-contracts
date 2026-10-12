@@ -1,0 +1,4 @@
+node_modules/
+.DS_Store
+# generated clients are produced in the consuming repos, not stored here
+/generated/

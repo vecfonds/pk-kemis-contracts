@@ -1,0 +1,571 @@
+openapi: 3.1.0
+info:
+  title: PkKemis identity
+  version: 0.1.0-draft
+  summary: Tài khoản, đăng nhập, token và vai trò.
+  description: |
+    BẢN NHÁP cho M1, chờ chủ dự án duyệt (docs/backend/M1-IDENTITY.md).
+
+    - Chỉ thêm, không xóa hay đổi nghĩa của trường đã phát hành.
+    - Thao tác nào gắn `x-phase: 2` có trong hợp đồng để định hình, nhưng giai đoạn 1 chưa cài.
+    - Thông báo lỗi (`detail`) bằng tiếng Việt, hiển thị được cho người dùng; mã `code` ổn định, dùng để xử lý trong mã.
+servers:
+  - url: http://identity:8080
+    description: Mạng Docker Compose (giai đoạn 1, chưa có gateway)
+# Mặc định cần access token; API công khai ghi `security: []` ở từng thao tác.
+security:
+  - bearerAuth: []
+tags:
+  - name: auth
+    description: Đăng ký, đăng nhập, làm mới và thu hồi phiên
+  - name: me
+    description: Người dùng đang đăng nhập
+  - name: admin
+    description: Quản trị người dùng (admin)
+  - name: internal
+    description: Chỉ service gọi nhau; không mở ra ngoài
+
+paths:
+  /v1/auth/register:
+    post:
+      tags: [auth]
+      operationId: register
+      summary: Đăng ký tài khoản học sinh hoặc giáo viên
+      description: Giáo viên không cần duyệt. Đăng ký xong là đăng nhập luôn.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RegisterRequest" }
+      responses:
+        "201":
+          description: Đã tạo tài khoản và cấp phiên
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthResponse" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "409":
+          description: Email đã được dùng (`code` = `email_taken`)
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+
+  /v1/auth/login:
+    post:
+      tags: [auth]
+      operationId: login
+      summary: Đăng nhập bằng email và mật khẩu
+      description: |
+        Sai email hay sai mật khẩu đều trả cùng một lỗi `invalid_credentials`, để không lộ email nào đã đăng ký.
+        Đăng nhập sai nhiều lần theo email hoặc IP bị chặn tạm (429).
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LoginRequest" }
+      responses:
+        "200":
+          description: Phiên mới
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthResponse" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401":
+          description: Sai email hoặc mật khẩu (`invalid_credentials`)
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "403":
+          description: Tài khoản bị khóa (`account_locked`)
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+
+  /v1/auth/refresh:
+    post:
+      tags: [auth]
+      operationId: refresh
+      summary: Đổi refresh token lấy cặp token mới
+      description: |
+        Refresh token dùng một lần: mỗi lần đổi cấp token mới và thu hồi token cũ, cùng một họ (`family`).
+        Nếu token đã dùng rồi bị đem ra dùng lại (nghi bị đánh cắp), cả họ bị thu hồi và trả `token_reuse_detected`.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RefreshRequest" }
+      responses:
+        "200":
+          description: Cặp token mới
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthResponse" }
+        "401":
+          description: Token không hợp lệ, hết hạn, đã thu hồi hoặc bị dùng lại (`token_invalid` / `token_reuse_detected`)
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "403":
+          description: Tài khoản bị khóa (`account_locked`)
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /v1/auth/logout:
+    post:
+      tags: [auth]
+      operationId: logout
+      summary: Đăng xuất thiết bị này
+      description: Thu hồi refresh token được gửi lên. Luôn trả 204, kể cả khi token đã hết hạn, để đăng xuất không bao giờ kẹt.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RefreshRequest" }
+      responses:
+        "204": { description: Đã đăng xuất }
+
+  /v1/auth/logout-all:
+    post:
+      tags: [auth]
+      operationId: logoutAll
+      summary: Đăng xuất mọi thiết bị
+      description: Thu hồi mọi refresh token của người dùng. Access token đang còn hạn hết hiệu lực khi hết hạn (tối đa 15 phút).
+      responses:
+        "204": { description: Đã đăng xuất mọi thiết bị }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/me:
+    get:
+      tags: [me]
+      operationId: getMe
+      summary: Hồ sơ của mình
+      responses:
+        "200":
+          description: Hồ sơ
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    patch:
+      tags: [me]
+      operationId: updateMe
+      summary: Sửa họ tên, ngày sinh, ảnh đại diện
+      description: Chỉ các trường gửi lên mới đổi. Gửi `null` cho `dateOfBirth` hoặc `avatarUrl` để xóa. Không đổi được email và vai trò ở đây.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateProfileRequest" }
+      responses:
+        "200":
+          description: Hồ sơ sau khi sửa
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/me/password:
+    patch:
+      tags: [me]
+      operationId: changePassword
+      summary: Đổi mật khẩu
+      description: Đổi xong, mọi phiên khác (refresh token khác) bị thu hồi; phiên hiện tại được giữ.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ChangePasswordRequest" }
+      responses:
+        "204": { description: Đã đổi }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401":
+          description: Chưa đăng nhập, hoặc sai mật khẩu hiện tại (`invalid_credentials`)
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+
+  /v1/admin/users:
+    get:
+      tags: [admin]
+      operationId: listUsers
+      x-phase: 2
+      summary: Danh sách người dùng
+      parameters:
+        - name: role
+          in: query
+          schema: { $ref: "#/components/schemas/Role" }
+        - name: q
+          in: query
+          description: Tìm theo email hoặc họ tên (không phân biệt hoa thường và dấu)
+          schema: { type: string, maxLength: 100 }
+        - name: page
+          in: query
+          schema: { type: integer, minimum: 0, default: 0 }
+        - name: size
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      responses:
+        "200":
+          description: Một trang người dùng
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserPage" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v1/admin/users/{userId}/role:
+    patch:
+      tags: [admin]
+      operationId: changeRole
+      x-phase: 2
+      summary: Đổi vai trò
+      description: Admin không tự đổi vai trò của mình (`self_action_forbidden`). Mọi thao tác ghi vào nhật ký kiểm toán.
+      parameters:
+        - { $ref: "#/components/parameters/UserId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ChangeRoleRequest" }
+      responses:
+        "200":
+          description: Người dùng sau khi đổi
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/admin/users/{userId}/lock:
+    post:
+      tags: [admin]
+      operationId: lockUser
+      x-phase: 2
+      summary: Khóa tài khoản
+      description: Thu hồi mọi refresh token. Admin không tự khóa mình (`self_action_forbidden`).
+      parameters:
+        - { $ref: "#/components/parameters/UserId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReasonRequest" }
+      responses:
+        "204": { description: Đã khóa }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/admin/users/{userId}/unlock:
+    post:
+      tags: [admin]
+      operationId: unlockUser
+      x-phase: 2
+      summary: Mở khóa tài khoản
+      parameters:
+        - { $ref: "#/components/parameters/UserId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReasonRequest" }
+      responses:
+        "204": { description: Đã mở khóa }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /.well-known/jwks.json:
+    get:
+      tags: [internal]
+      operationId: getJwks
+      summary: Khóa công khai để kiểm access token
+      description: Các service tự kiểm JWT bằng khóa này, không gọi identity cho mỗi yêu cầu. Cho phép lưu đệm vài phút.
+      security: []
+      responses:
+        "200":
+          description: Tập khóa công khai (JWKS, RFC 7517)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Jwks" }
+
+  /internal/users/batch:
+    post:
+      tags: [internal]
+      operationId: getUsersBatch
+      summary: Tên và vai trò của nhiều người cùng lúc
+      description: Chỉ service gọi nhau. Mã không tồn tại thì bị bỏ qua trong kết quả, không báo lỗi.
+      security:
+        - internalKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UsersBatchRequest" }
+      responses:
+        "200":
+          description: Thông tin tóm tắt
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UsersBatchResponse" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        Access token RS256, sống tối đa 15 phút. Claim: `sub` (mã người dùng), `role`, `iss` = `pk-kemis-identity`, `iat`, `exp`, `jti`.
+        Không chứa email hay họ tên.
+    internalKey:
+      type: apiKey
+      in: header
+      name: X-Internal-Key
+      description: Khóa dùng chung giữa các service (lấy từ AWS Secrets Manager). Thay bằng token giữa service khi có gateway.
+
+  parameters:
+    UserId:
+      name: userId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+
+  responses:
+    ValidationFailed:
+      description: Dữ liệu gửi lên không hợp lệ (`validation_failed`), kèm danh sách lỗi từng trường
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    Unauthorized:
+      description: Chưa đăng nhập hoặc access token không hợp lệ / hết hạn (`token_invalid`)
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    Forbidden:
+      description: Không đủ quyền (`forbidden`, hoặc `self_action_forbidden`)
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    NotFound:
+      description: Không tìm thấy (`not_found`)
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    TooManyRequests:
+      description: Thử quá nhiều lần (`too_many_attempts`); chờ theo `Retry-After`
+      headers:
+        Retry-After:
+          description: Số giây phải chờ
+          schema: { type: integer }
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+
+  schemas:
+    Role:
+      type: string
+      enum: [student, teacher, admin]
+
+    User:
+      type: object
+      required: [id, email, fullName, role, emailVerified, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        fullName: { type: string }
+        role: { $ref: "#/components/schemas/Role" }
+        avatarUrl: { type: [string, "null"], format: uri }
+        dateOfBirth: { type: [string, "null"], format: date }
+        emailVerified:
+          type: boolean
+          description: Giai đoạn 1 luôn `false` vì chưa gửi email xác minh; đăng nhập không đòi hỏi trường này.
+        createdAt: { type: string, format: date-time }
+
+    UserSummary:
+      type: object
+      required: [id, fullName, role, locked]
+      properties:
+        id: { type: string, format: uuid }
+        fullName: { type: string }
+        role: { $ref: "#/components/schemas/Role" }
+        avatarUrl: { type: [string, "null"], format: uri }
+        locked: { type: boolean }
+
+    RegisterRequest:
+      type: object
+      required: [email, password, fullName, role]
+      properties:
+        email: { type: string, format: email, maxLength: 254 }
+        password:
+          type: string
+          minLength: 8
+          maxLength: 128
+          description: Ít nhất 8 kí tự.
+        fullName: { type: string, minLength: 1, maxLength: 80 }
+        role:
+          type: string
+          enum: [student, teacher]
+          description: Admin không tự đăng ký được.
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email, maxLength: 254 }
+        password: { type: string, maxLength: 128 }
+        rememberMe:
+          type: boolean
+          default: false
+          description: Bật thì refresh token sống 30 ngày, tắt thì 24 giờ.
+        deviceName:
+          type: string
+          maxLength: 80
+          description: Tên thiết bị để người dùng nhận ra phiên (tùy chọn).
+
+    RefreshRequest:
+      type: object
+      required: [refreshToken]
+      properties:
+        refreshToken: { type: string }
+
+    AuthResponse:
+      type: object
+      required: [accessToken, accessTokenExpiresIn, refreshToken, refreshTokenExpiresIn, user]
+      properties:
+        accessToken: { type: string }
+        accessTokenExpiresIn:
+          type: integer
+          description: Số giây còn hiệu lực.
+        refreshToken: { type: string }
+        refreshTokenExpiresIn:
+          type: integer
+          description: Số giây còn hiệu lực.
+        user: { $ref: "#/components/schemas/User" }
+
+    UpdateProfileRequest:
+      type: object
+      minProperties: 1
+      properties:
+        fullName: { type: string, minLength: 1, maxLength: 80 }
+        dateOfBirth: { type: [string, "null"], format: date }
+        avatarUrl: { type: [string, "null"], format: uri, maxLength: 500 }
+
+    ChangePasswordRequest:
+      type: object
+      required: [currentPassword, newPassword]
+      properties:
+        currentPassword: { type: string, maxLength: 128 }
+        newPassword: { type: string, minLength: 8, maxLength: 128 }
+
+    ChangeRoleRequest:
+      type: object
+      required: [role, reason]
+      properties:
+        role: { $ref: "#/components/schemas/Role" }
+        reason: { type: string, minLength: 1, maxLength: 500 }
+
+    ReasonRequest:
+      type: object
+      required: [reason]
+      properties:
+        reason: { type: string, minLength: 1, maxLength: 500 }
+
+    UserPage:
+      type: object
+      required: [items, page, size, total]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/User" }
+        page: { type: integer }
+        size: { type: integer }
+        total: { type: integer, format: int64 }
+
+    UsersBatchRequest:
+      type: object
+      required: [ids]
+      properties:
+        ids:
+          type: array
+          minItems: 1
+          maxItems: 100
+          uniqueItems: true
+          items: { type: string, format: uuid }
+
+    UsersBatchResponse:
+      type: object
+      required: [users]
+      properties:
+        users:
+          type: array
+          items: { $ref: "#/components/schemas/UserSummary" }
+
+    Jwks:
+      type: object
+      required: [keys]
+      properties:
+        keys:
+          type: array
+          items:
+            type: object
+            required: [kty, kid, use, alg, n, e]
+            properties:
+              kty: { type: string, const: RSA }
+              kid: { type: string }
+              use: { type: string, const: sig }
+              alg: { type: string, const: RS256 }
+              n: { type: string }
+              e: { type: string }
+
+    Problem:
+      type: object
+      description: Lỗi theo RFC 9457 (`application/problem+json`).
+      required: [type, title, status, code]
+      properties:
+        type:
+          type: string
+          description: Địa chỉ định danh loại lỗi; `about:blank` nếu không có.
+          default: about:blank
+        title: { type: string }
+        status: { type: integer }
+        code:
+          type: string
+          description: Mã ổn định để xử lý trong mã.
+          enum:
+            - validation_failed
+            - email_taken
+            - invalid_credentials
+            - account_locked
+            - token_invalid
+            - token_reuse_detected
+            - too_many_attempts
+            - forbidden
+            - self_action_forbidden
+            - not_found
+        detail:
+          type: string
+          description: Thông báo tiếng Việt, hiển thị được cho người dùng.
+        errors:
+          type: array
+          description: Lỗi từng trường (chỉ với `validation_failed`).
+          items:
+            type: object
+            required: [field, message]
+            properties:
+              field: { type: string }
+              message: { type: string }
