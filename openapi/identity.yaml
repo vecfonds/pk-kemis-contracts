@@ -198,7 +198,7 @@ paths:
       tags: [me]
       operationId: updateMe
       summary: Sửa họ tên, ngày sinh, ảnh đại diện
-      description: Chỉ các trường gửi lên mới đổi. Gửi `null` cho `dateOfBirth` hoặc `avatarUrl` để xóa. Không đổi được email và vai trò ở đây.
+      description: Chỉ các trường gửi lên mới đổi. Gửi `null` cho `avatarUrl` để xóa ảnh đại diện. Không đổi được email và vai trò ở đây.
       requestBody:
         required: true
         content:
@@ -363,6 +363,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/UsersBatchResponse" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
 
 components:
   securitySchemes:
@@ -371,7 +372,7 @@ components:
       scheme: bearer
       bearerFormat: JWT
       description: |
-        Access token RS256, sống tối đa 15 phút. Claim: `sub` (mã người dùng), `role`, `iss` = `pk-kemis-identity`, `iat`, `exp`, `jti`.
+        Access token RS256, sống tối đa 15 phút. Claim: `sub` (mã người dùng), `role`, `sid` (mã phiên đăng nhập, để giữ phiên hiện tại khi đổi mật khẩu), `iss` = `pk-kemis-identity`, `iat`, `exp`, `jti`.
         Không chứa email hay họ tên.
     internalKey:
       type: apiKey
@@ -424,14 +425,14 @@ components:
 
     User:
       type: object
-      required: [id, email, fullName, role, emailVerified, createdAt]
+      required: [id, email, fullName, role, dateOfBirth, emailVerified, createdAt]
       properties:
         id: { type: string, format: uuid }
         email: { type: string, format: email }
         fullName: { type: string }
         role: { $ref: "#/components/schemas/Role" }
         avatarUrl: { type: [string, "null"], format: uri }
-        dateOfBirth: { type: [string, "null"], format: date }
+        dateOfBirth: { type: string, format: date }
         emailVerified:
           type: boolean
           description: Giai đoạn 1 luôn `false` vì chưa gửi email xác minh; đăng nhập không đòi hỏi trường này.
@@ -505,7 +506,7 @@ components:
       minProperties: 1
       properties:
         fullName: { type: string, minLength: 1, maxLength: 80 }
-        dateOfBirth: { type: [string, "null"], format: date }
+        dateOfBirth: { type: string, format: date, description: Không được ở tương lai; không xóa được vì bắt buộc. }
         avatarUrl: { type: [string, "null"], format: uri, maxLength: 500 }
 
     ForgotPasswordRequest:
@@ -601,11 +602,11 @@ components:
     Problem:
       type: object
       description: Lỗi theo RFC 9457 (`application/problem+json`).
-      required: [type, title, status, code]
+      required: [title, status, code]
       properties:
         type:
           type: string
-          description: Địa chỉ định danh loại lỗi; `about:blank` nếu không có.
+          description: Địa chỉ định danh loại lỗi; vắng mặt hoặc `about:blank` nghĩa là không có loại riêng (RFC 9457).
           default: about:blank
         title: { type: string }
         status: { type: integer }
@@ -624,6 +625,7 @@ components:
             - forbidden
             - self_action_forbidden
             - not_found
+            - internal_error
         detail:
           type: string
           description: Thông báo tiếng Việt, hiển thị được cho người dùng.
