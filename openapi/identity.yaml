@@ -1,10 +1,10 @@
 openapi: 3.1.0
 info:
   title: PkKemis identity
-  version: 0.1.0-draft
+  version: 0.2.0
   summary: Tài khoản, đăng nhập, token và vai trò.
   description: |
-    BẢN NHÁP cho M1, chờ chủ dự án duyệt (docs/backend/M1-IDENTITY.md).
+    Đã được chủ dự án duyệt ngày 13/10/2026 (docs/backend/M1-IDENTITY.md).
 
     - Chỉ thêm, không xóa hay đổi nghĩa của trường đã phát hành.
     - Thao tác nào gắn `x-phase: 2` có trong hợp đồng để định hình, nhưng giai đoạn 1 chưa cài.
@@ -140,6 +140,47 @@ paths:
       responses:
         "204": { description: Đã đăng xuất mọi thiết bị }
         "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/auth/password/forgot:
+    post:
+      tags: [auth]
+      operationId: forgotPassword
+      summary: Xin liên kết đặt lại mật khẩu
+      description: |
+        Luôn trả 202 dù email có tài khoản hay không, để không lộ email nào đã đăng ký.
+        Nếu có tài khoản, gửi email chứa liên kết dùng một lần, sống 1 giờ. Xin lại thì liên kết cũ hết hiệu lực.
+        Giới hạn số lần xin theo email và IP.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ForgotPasswordRequest" }
+      responses:
+        "202": { description: Đã nhận yêu cầu }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+
+  /v1/auth/password/reset:
+    post:
+      tags: [auth]
+      operationId: resetPassword
+      summary: Đặt lại mật khẩu bằng mã trong email
+      description: Đặt xong, mọi phiên (refresh token) của người dùng bị thu hồi; phải đăng nhập lại.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ResetPasswordRequest" }
+      responses:
+        "204": { description: Đã đặt lại mật khẩu }
+        "400":
+          description: Dữ liệu không hợp lệ (`validation_failed`), hoặc mã sai, hết hạn, đã dùng (`reset_token_invalid`)
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
 
   /v1/me:
     get:
@@ -411,11 +452,7 @@ components:
       required: [email, password, fullName, dateOfBirth, role]
       properties:
         email: { type: string, format: email, maxLength: 254 }
-        password:
-          type: string
-          minLength: 8
-          maxLength: 128
-          description: Ít nhất 8 kí tự.
+        password: { $ref: "#/components/schemas/NewPassword" }
         fullName: { type: string, minLength: 1, maxLength: 80 }
         dateOfBirth:
           type: string
@@ -471,12 +508,35 @@ components:
         dateOfBirth: { type: [string, "null"], format: date }
         avatarUrl: { type: [string, "null"], format: uri, maxLength: 500 }
 
+    ForgotPasswordRequest:
+      type: object
+      required: [email]
+      properties:
+        email: { type: string, format: email, maxLength: 254 }
+
+    ResetPasswordRequest:
+      type: object
+      required: [token, newPassword]
+      properties:
+        token:
+          type: string
+          description: Mã trong liên kết của email.
+        newPassword: { $ref: "#/components/schemas/NewPassword" }
+
+    NewPassword:
+      type: string
+      minLength: 8
+      maxLength: 72
+      description: |
+        Ít nhất 8 kí tự. Mật khẩu băm bằng bcrypt, chỉ đọc 72 byte đầu; để không cắt ngầm, tối đa 72 byte UTF-8
+        (chữ có dấu chiếm 2–3 byte). Quá giới hạn thì trả `validation_failed`, không cắt.
+
     ChangePasswordRequest:
       type: object
       required: [currentPassword, newPassword]
       properties:
         currentPassword: { type: string, maxLength: 128 }
-        newPassword: { type: string, minLength: 8, maxLength: 128 }
+        newPassword: { $ref: "#/components/schemas/NewPassword" }
 
     ChangeRoleRequest:
       type: object
@@ -559,6 +619,7 @@ components:
             - account_locked
             - token_invalid
             - token_reuse_detected
+            - reset_token_invalid
             - too_many_attempts
             - forbidden
             - self_action_forbidden
