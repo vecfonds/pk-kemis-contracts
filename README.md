@@ -6,8 +6,8 @@ Hợp đồng giữa các service của PkKemis và nguồn sự thật cho API.
 
 | File | Service | Trạng thái |
 |---|---|---|
-| `openapi/identity.yaml` | identity | bản nháp 0.1.0, chờ chủ dự án duyệt (M1) |
-| `openapi/learning.yaml` | learning | chưa viết (M3) |
+| `openapi/identity.yaml` | identity | 0.2.0, đã duyệt và đã cài (M1, M2) |
+| `openapi/learning.yaml` | learning | 0.1.0, đã cài và đối chiếu bằng `test/contract.spec.ts` ở learning (M3) |
 | `openapi/classroom.yaml` | classroom | chưa viết (M4) |
 
 AsyncAPI cho sự kiện sẽ thêm khi có Kafka.

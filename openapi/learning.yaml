@@ -1,0 +1,714 @@
+openapi: 3.1.0
+info:
+  title: PkKemis learning
+  version: 0.1.0
+  summary: Bài tập, đề thi, chấm điểm và sổ cái XP.
+  description: |
+    Giai đoạn 1 (docs/backend/M3-LEARNING.md): bộ bài tập và đề thi, lượt làm bài do máy chủ chấm, XP, cấp độ, chuỗi ngày.
+    Nội dung học (khóa, bài), sổ tay lỗi sai, bảng xếp hạng, quyền riêng tư chưa có.
+
+    - Chỉ thêm, không xóa hay đổi nghĩa của trường đã phát hành.
+    - Token là access token của identity (xem identity.yaml); service tự kiểm bằng khóa công khai, không gọi identity.
+    - Chỉ học sinh làm bài và có XP; giáo viên và admin đọc được nội dung (403 ở các thao tác còn lại).
+    - **Đáp án không rời service trước khi nộp:** đề gửi xuống không có đáp án và lời giải; bộ bài tập trả đáp án của từng câu
+      ngay sau khi câu đó được trả lời; đề thi trả đáp án sau khi nộp.
+    - Lỗi theo RFC 9457 (`application/problem+json`), cùng dạng với identity.
+servers:
+  - url: http://learning:8080
+    description: Mạng Docker Compose (giai đoạn 1, chưa có gateway)
+security:
+  - bearerAuth: []
+tags:
+  - name: content
+    description: Bộ bài tập và đề thi (không kèm đáp án)
+  - name: attempts
+    description: Làm bài, chấm điểm, XP
+  - name: progress
+    description: XP, cấp độ, chuỗi ngày
+
+paths:
+  /v1/exercise-sets:
+    get:
+      tags: [content]
+      operationId: listExerciseSets
+      summary: Các bộ bài tập
+      responses:
+        "200":
+          description: Danh sách
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/ExerciseSetSummary" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/exercise-sets/{setId}:
+    get:
+      tags: [content]
+      operationId: getExerciseSet
+      summary: Một bộ bài tập kèm các câu hỏi (không có đáp án)
+      parameters:
+        - { $ref: "#/components/parameters/SetId" }
+      responses:
+        "200":
+          description: Bộ bài tập
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ExerciseSetDetail" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/exams:
+    get:
+      tags: [content]
+      operationId: listExams
+      summary: Các đề thi
+      responses:
+        "200":
+          description: Danh sách
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/ExamSummary" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/exams/{examId}:
+    get:
+      tags: [content]
+      operationId: getExam
+      summary: Một đề thi kèm các câu hỏi (không có đáp án)
+      parameters:
+        - { $ref: "#/components/parameters/ExamId" }
+      responses:
+        "200":
+          description: Đề thi
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ExamDetail" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/attempts:
+    post:
+      tags: [attempts]
+      operationId: startAttempt
+      summary: Bắt đầu làm một bộ bài tập hoặc đề thi, hoặc làm tiếp lượt đang mở
+      description: |
+        Mỗi học sinh chỉ có một lượt đang mở cho mỗi bộ hoặc đề: gọi lại thì trả lượt đó (200), đồng hồ không bắt đầu lại.
+        Tối đa 5 lượt đã nộp cho mỗi bộ hoặc đề. Đề thi bỏ dở quá giờ được chấm ngay khi học sinh bắt đầu lại và tính là một lượt.
+        Đề chưa đến giờ mở trả 409 `exam_not_open`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/StartAttemptRequest" }
+      responses:
+        "200":
+          description: Lượt đang mở được làm tiếp
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OpenAttempt" }
+        "201":
+          description: Lượt mới
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OpenAttempt" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Hết lượt (`attempt_limit_reached`) hoặc đề chưa mở (`exam_not_open`)
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /v1/attempts/{attemptId}:
+    get:
+      tags: [attempts]
+      operationId: getAttempt
+      summary: Một lượt làm của mình
+      description: Đang mở thì trả `OpenAttempt`, đã nộp thì trả `AttemptResult`. Lượt của người khác giống như không tồn tại (404).
+      parameters:
+        - { $ref: "#/components/parameters/AttemptId" }
+      responses:
+        "200":
+          description: Lượt làm
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/OpenAttempt" }
+                  - { $ref: "#/components/schemas/AttemptResult" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/attempts/{attemptId}/draft:
+    put:
+      tags: [attempts]
+      operationId: saveDraft
+      summary: Lưu bài đề thi đang làm dở
+      description: |
+        Chỉ cho đề thi. Gộp các câu trả lời vào bản nháp trên máy chủ để tải lại trang vẫn làm tiếp, và để bài vẫn được chấm
+        nếu học sinh đóng tab. Quá giờ (cộng 15 giây du di) thì trả 409 `attempt_closed`.
+        Bộ bài tập lưu từng câu qua `/answers`.
+      parameters:
+        - { $ref: "#/components/parameters/AttemptId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [answers]
+              properties:
+                answers: { $ref: "#/components/schemas/AnswerList" }
+      responses:
+        "204": { description: Đã lưu }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Bài đã nộp hoặc hết giờ (`attempt_closed`)
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /v1/attempts/{attemptId}/answers:
+    post:
+      tags: [attempts]
+      operationId: answerQuestion
+      summary: Trả lời một câu của bộ bài tập và xem đáp án ngay
+      description: |
+        Chỉ cho bộ bài tập. Mỗi câu chỉ trả lời một lần trong một lượt (409 `already_answered`), để không thử lần lượt từng phương án.
+        Đề thi trả 409 `not_available_during_exam`: đáp án chỉ có sau khi nộp.
+      parameters:
+        - { $ref: "#/components/parameters/AttemptId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [questionId, answer]
+              properties:
+                questionId: { type: string }
+                answer: { $ref: "#/components/schemas/Answer" }
+      responses:
+        "200":
+          description: Kết quả câu vừa trả lời, kèm đáp án và lời giải
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [questionId, mark, reveal]
+                properties:
+                  questionId: { type: string }
+                  mark: { $ref: "#/components/schemas/Mark" }
+                  reveal: { $ref: "#/components/schemas/Reveal" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Đã trả lời câu này (`already_answered`), bài đã đóng (`attempt_closed`) hoặc là đề thi (`not_available_during_exam`)
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /v1/attempts/{attemptId}/submit:
+    post:
+      tags: [attempts]
+      operationId: submitAttempt
+      summary: Nộp bài, chấm điểm và nhận XP
+      description: |
+        Máy chủ tự chấm theo định dạng đề tốt nghiệp từ 2025. Nộp lại cùng một lượt trả về đúng kết quả cũ (không cộng XP lần nữa).
+
+        - **Đề thi:** các câu gửi kèm ghi đè bản nháp. Nộp sau giờ (cộng 15 giây du di) thì chỉ chấm bản nháp đã lưu, `timedOut` = true.
+        - **Bộ bài tập:** câu đã trả lời qua `/answers` là cuối cùng; câu còn lại có thể gửi kèm.
+        - **XP:** chỉ lượt nộp đầu tiên của mỗi bộ hoặc đề được XP. Thưởng hoàn thành: bộ bài tập khi trả lời đủ mọi câu, đề thi khi đạt.
+        - `seconds` do máy khách báo, bị chặn trên bởi thời gian máy chủ đo.
+      parameters:
+        - { $ref: "#/components/parameters/AttemptId" }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                answers: { $ref: "#/components/schemas/AnswerList" }
+                seconds: { type: number, minimum: 0 }
+      responses:
+        "200":
+          description: Kết quả
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AttemptResult" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/me/attempts:
+    get:
+      tags: [attempts]
+      operationId: listMyAttempts
+      summary: Các lượt làm của mình, mới nhất trước (tối đa 200)
+      parameters:
+        - name: kind
+          in: query
+          schema: { $ref: "#/components/schemas/AttemptKind" }
+        - name: refId
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: Danh sách
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/AttemptSummary" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v1/me/results:
+    get:
+      tags: [attempts]
+      operationId: getMyResults
+      summary: Kết quả mới nhất của từng câu hỏi đã làm
+      responses:
+        "200":
+          description: Theo mã câu hỏi
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [results]
+                properties:
+                  results:
+                    type: object
+                    additionalProperties:
+                      type: object
+                      required: [share, at]
+                      properties:
+                        share: { type: number, minimum: 0, maximum: 1, description: Phần trả lời đúng lần gần nhất. }
+                        at: { type: string, format: date-time }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v1/me/stats:
+    get:
+      tags: [progress]
+      operationId: getMyStats
+      summary: XP, cấp độ, chuỗi ngày, XP tuần này
+      description: |
+        Tính từ sổ cái XP và các lượt làm, không lưu sẵn. Ngày tính theo giờ Việt Nam, tuần bắt đầu từ thứ Hai.
+        Chuỗi ngày còn nếu ngày học gần nhất là hôm nay hoặc hôm qua.
+      responses:
+        "200":
+          description: Số liệu
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Stats" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Access token của identity (RS256).
+
+  parameters:
+    SetId:
+      name: setId
+      in: path
+      required: true
+      schema: { type: string }
+    ExamId:
+      name: examId
+      in: path
+      required: true
+      schema: { type: string }
+    AttemptId:
+      name: attemptId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+
+  responses:
+    ValidationFailed:
+      description: Dữ liệu gửi lên không hợp lệ (`validation_failed`), kèm lỗi từng trường
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    Unauthorized:
+      description: Chưa đăng nhập hoặc token không hợp lệ / hết hạn (`token_invalid`)
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    Forbidden:
+      description: Không phải học sinh (`forbidden`)
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    NotFound:
+      description: Không tìm thấy, hoặc lượt làm của người khác (`not_found`)
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+
+  schemas:
+    Problem:
+      type: object
+      description: Lỗi theo RFC 9457. Cùng dạng với identity; có thêm các mã của service này.
+      required: [title, status, code]
+      properties:
+        type: { type: string, default: about:blank }
+        title: { type: string }
+        status: { type: integer }
+        code:
+          type: string
+          enum:
+            - validation_failed
+            - token_invalid
+            - forbidden
+            - not_found
+            - attempt_limit_reached
+            - exam_not_open
+            - attempt_closed
+            - already_answered
+            - not_available_during_exam
+            - internal_error
+        detail: { type: string, description: "Thông báo tiếng Việt, hiển thị được cho người dùng." }
+        errors:
+          type: array
+          items:
+            type: object
+            required: [field, message]
+            properties:
+              field: { type: string }
+              message: { type: string }
+
+    AttemptKind:
+      type: string
+      enum: [exercise, exam]
+
+    QuestionType:
+      type: string
+      enum: [single, truefalse, short]
+      description: Phần I (single), phần II (truefalse), phần III (short).
+
+    QuestionLevel:
+      type: string
+      enum: [biet, hieu, vandung]
+      description: Nhận biết, thông hiểu, vận dụng.
+
+    StartAttemptRequest:
+      type: object
+      required: [kind, refId]
+      properties:
+        kind: { $ref: "#/components/schemas/AttemptKind" }
+        refId: { type: string, description: Mã bộ bài tập hoặc đề thi. }
+
+    ExerciseSetSummary:
+      type: object
+      required: [id, title, courseId, chapterId, chapterLabel, difficulty, experiencePerCorrect, completionBonus, questionCount]
+      properties:
+        id: { type: string }
+        title: { type: string }
+        courseId: { type: string }
+        chapterId: { type: string }
+        chapterLabel: { type: string }
+        difficulty: { type: string, enum: [easy, medium, hard] }
+        experiencePerCorrect: { type: integer }
+        completionBonus: { type: integer }
+        author: { type: string }
+        questionCount: { type: integer }
+
+    ExerciseSetDetail:
+      allOf:
+        - type: object
+          required: [id, title, courseId, chapterId, chapterLabel, difficulty, experiencePerCorrect, completionBonus, questions]
+          properties:
+            id: { type: string }
+            title: { type: string }
+            courseId: { type: string }
+            chapterId: { type: string }
+            chapterLabel: { type: string }
+            difficulty: { type: string, enum: [easy, medium, hard] }
+            experiencePerCorrect: { type: integer }
+            completionBonus: { type: integer }
+            author: { type: string }
+            questions:
+              type: array
+              items: { $ref: "#/components/schemas/PublicQuestion" }
+
+    ExamSummary:
+      type: object
+      required: [id, title, description, courseId, scopeLabel, durationMinutes, status, passPercent, experiencePerCorrect, completionBonus, questionCount]
+      properties:
+        id: { type: string }
+        title: { type: string }
+        description: { type: string }
+        courseId: { type: string }
+        scopeLabel: { type: string }
+        durationMinutes: { type: integer }
+        status: { type: string, enum: [available, upcoming, completed] }
+        opensAt: { type: string, format: date }
+        passPercent: { type: integer }
+        experiencePerCorrect: { type: integer }
+        completionBonus: { type: integer }
+        author: { type: string }
+        questionCount: { type: integer }
+
+    ExamDetail:
+      allOf:
+        - type: object
+          required: [id, title, durationMinutes, status, passPercent, questions]
+          properties:
+            id: { type: string }
+            title: { type: string }
+            description: { type: string }
+            courseId: { type: string }
+            scopeLabel: { type: string }
+            durationMinutes: { type: integer }
+            status: { type: string, enum: [available, upcoming, completed] }
+            opensAt: { type: string, format: date }
+            passPercent: { type: integer }
+            experiencePerCorrect: { type: integer }
+            completionBonus: { type: integer }
+            author: { type: string }
+            questions:
+              type: array
+              items: { $ref: "#/components/schemas/PublicQuestion" }
+
+    PublicQuestion:
+      description: Câu hỏi như học sinh thấy trước khi trả lời, không có đáp án và lời giải.
+      type: object
+      required: [id, type, chapterId, topic, level, prompt]
+      properties:
+        id: { type: string }
+        type: { $ref: "#/components/schemas/QuestionType" }
+        chapterId: { type: string }
+        lessonId: { type: string }
+        topic: { type: string }
+        level: { $ref: "#/components/schemas/QuestionLevel" }
+        prompt: { type: string }
+        hint: { type: string, description: "Bước đầu của lời giải, không lộ đáp án." }
+        tool:
+          type: object
+          required: [href, label]
+          properties:
+            href: { type: string }
+            label: { type: string }
+        options:
+          type: array
+          items: { type: string }
+          description: Chỉ với `single`.
+        statements:
+          type: array
+          items:
+            type: object
+            required: [text]
+            properties:
+              text: { type: string }
+          description: Chỉ với `truefalse`.
+
+    Answer:
+      description: Câu trả lời của học sinh, theo dạng câu hỏi.
+      oneOf:
+        - type: object
+          required: [type, choice]
+          properties:
+            type: { const: single }
+            choice: { type: integer, minimum: -1, description: Vị trí phương án (từ 0); -1 là chưa chọn. }
+        - type: object
+          required: [type, values]
+          properties:
+            type: { const: truefalse }
+            values:
+              type: array
+              items: { type: [boolean, "null"] }
+              description: Đúng số ý của câu; null là bỏ trống ý đó.
+        - type: object
+          required: [type, text]
+          properties:
+            type: { const: short }
+            text: { type: string, maxLength: 20 }
+
+    AnswerList:
+      type: array
+      items:
+        type: object
+        required: [questionId, answer]
+        properties:
+          questionId: { type: string }
+          answer: { $ref: "#/components/schemas/Answer" }
+
+    Mark:
+      type: object
+      required: [earned, max, share, correct, complete]
+      properties:
+        earned: { type: integer, description: Phần trăm điểm (1/100 điểm) đạt được. }
+        max: { type: integer }
+        share: { type: number, minimum: 0, maximum: 1, description: Phần trả lời đúng của câu (phần II là số ý đúng chia 4). }
+        correct: { type: boolean }
+        complete: { type: boolean, description: Đã trả lời đủ mọi phần của câu. }
+        statementsRight: { type: integer, description: Chỉ với phần II. }
+
+    Reveal:
+      description: Đáp án và lời giải, chỉ có sau khi câu đã được trả lời (bộ bài tập) hoặc sau khi nộp.
+      oneOf:
+        - type: object
+          required: [type, answerIndex, explanation]
+          properties:
+            type: { const: single }
+            answerIndex: { type: integer }
+            explanation: { type: string }
+        - type: object
+          required: [type, statements, explanation]
+          properties:
+            type: { const: truefalse }
+            statements:
+              type: array
+              items:
+                type: object
+                required: [answer, explanation]
+                properties:
+                  answer: { type: boolean }
+                  explanation: { type: string }
+            explanation: { type: string }
+        - type: object
+          required: [type, answer, explanation]
+          properties:
+            type: { const: short }
+            answer: { type: string }
+            explanation: { type: string }
+
+    OpenAttempt:
+      type: object
+      required: [id, kind, refId, status, startedAt, attemptsLeft, questionCount, checked]
+      properties:
+        id: { type: string, format: uuid }
+        kind: { $ref: "#/components/schemas/AttemptKind" }
+        refId: { type: string }
+        status: { const: in_progress }
+        startedAt: { type: string, format: date-time }
+        deadline: { type: [string, "null"], format: date-time, description: Chỉ đề thi; giờ máy chủ quyết định hết giờ. }
+        attemptsLeft: { type: integer, description: Số lượt còn lại kể cả lượt này. }
+        questionCount: { type: integer }
+        draft:
+          type: object
+          additionalProperties: { $ref: "#/components/schemas/Answer" }
+          description: Đề thi, các câu trả lời đã lưu, theo mã câu hỏi.
+        checked:
+          type: array
+          description: Bộ bài tập, các câu đã trả lời kèm điểm và đáp án.
+          items:
+            type: object
+            required: [questionId, answer, mark, reveal]
+            properties:
+              questionId: { type: string }
+              answer: { $ref: "#/components/schemas/Answer" }
+              mark: { $ref: "#/components/schemas/Mark" }
+              reveal: { $ref: "#/components/schemas/Reveal" }
+
+    AttemptResult:
+      type: object
+      required: [id, kind, refId, status, startedAt, submittedAt, seconds, timedOut, correct, total, earned, max, score10, xp, firstAttempt, parts, questions]
+      properties:
+        id: { type: string, format: uuid }
+        kind: { $ref: "#/components/schemas/AttemptKind" }
+        refId: { type: string }
+        status: { const: submitted }
+        startedAt: { type: string, format: date-time }
+        submittedAt: { type: string, format: date-time }
+        seconds: { type: integer }
+        timedOut: { type: boolean, description: Nộp quá giờ nên chỉ chấm bản nháp đã lưu. }
+        correct: { type: integer, description: Số câu đúng hoàn toàn. }
+        total: { type: integer }
+        earned: { type: integer, description: 1/100 điểm. }
+        max: { type: integer }
+        score10: { type: number, description: "Thang 10, hai chữ số thập phân." }
+        xp: { type: integer, description: XP lượt này mang lại; chỉ lượt nộp đầu tiên của mỗi bộ hoặc đề khác 0. }
+        firstAttempt: { type: boolean }
+        passed: { type: boolean, description: Chỉ đề thi. }
+        parts:
+          type: object
+          required: [I, II, III]
+          properties:
+            I: { $ref: "#/components/schemas/PartScore" }
+            II: { $ref: "#/components/schemas/PartScore" }
+            III: { $ref: "#/components/schemas/PartScore" }
+        questions:
+          type: array
+          items:
+            type: object
+            required: [questionId, answer, mark, reveal]
+            properties:
+              questionId: { type: string }
+              answer:
+                oneOf:
+                  - { $ref: "#/components/schemas/Answer" }
+                  - { type: "null" }
+              mark: { $ref: "#/components/schemas/Mark" }
+              reveal: { $ref: "#/components/schemas/Reveal" }
+
+    PartScore:
+      type: object
+      required: [earned, max, questions, correct]
+      properties:
+        earned: { type: integer }
+        max: { type: integer }
+        questions: { type: integer }
+        correct: { type: integer }
+
+    AttemptSummary:
+      type: object
+      required: [id, kind, refId, status, startedAt, xp, firstAttempt]
+      properties:
+        id: { type: string, format: uuid }
+        kind: { $ref: "#/components/schemas/AttemptKind" }
+        refId: { type: string }
+        status: { type: string, enum: [in_progress, submitted] }
+        startedAt: { type: string, format: date-time }
+        submittedAt: { type: [string, "null"], format: date-time }
+        correct: { type: [integer, "null"] }
+        total: { type: [integer, "null"] }
+        earned: { type: [integer, "null"] }
+        max: { type: [integer, "null"] }
+        score10: { type: [number, "null"] }
+        seconds: { type: [integer, "null"] }
+        xp: { type: integer }
+        firstAttempt: { type: boolean }
+
+    Stats:
+      type: object
+      required: [totalXp, level, currentLevelXp, nextLevelXp, streakDays, longestStreakDays, weeklyXp]
+      properties:
+        totalXp: { type: integer }
+        level: { type: integer }
+        currentLevelXp: { type: integer, description: XP lúc cấp hiện tại bắt đầu. }
+        nextLevelXp: { type: integer, description: XP lúc cấp kế tiếp bắt đầu. }
+        streakDays: { type: integer }
+        longestStreakDays: { type: integer }
+        weeklyXp: { type: integer }
