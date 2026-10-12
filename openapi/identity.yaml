@@ -408,7 +408,7 @@ components:
 
     RegisterRequest:
       type: object
-      required: [email, password, fullName, role]
+      required: [email, password, fullName, dateOfBirth, role]
       properties:
         email: { type: string, format: email, maxLength: 254 }
         password:
@@ -417,6 +417,12 @@ components:
           maxLength: 128
           description: Ít nhất 8 kí tự.
         fullName: { type: string, minLength: 1, maxLength: 80 }
+        dateOfBirth:
+          type: string
+          format: date
+          description: |
+            Bắt buộc (chủ dự án chốt 13/10/2026), dùng để biết người dùng dưới 16 tuổi hay không theo Nghị định 13/2023/NĐ-CP.
+            Không được ở tương lai. Quy trình cha mẹ đồng ý cho người dưới 16 tuổi chưa chốt, nên chưa có trường nào cho nó.
         role:
           type: string
           enum: [student, teacher]
