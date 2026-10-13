@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: PkKemis classroom
-  version: 0.6.0
+  version: 0.7.0
   summary: Lớp học, suất học, học sinh, bài giáo viên soạn, bài giao, làm bài và kết quả.
   description: |
     Lát A và B của M4 (docs/backend/M4-CLASSROOM.md): tạo lớp, vào lớp bằng mã, suất học và hạn dùng, mua thêm suất, gia hạn, rời lớp, xóa học sinh,
@@ -171,7 +171,8 @@ paths:
       summary: Mở lớp chính thức, mua thêm suất hoặc gia hạn (giáo viên của lớp)
       description: |
         Người lập lớp bị thu vai trò giáo viên chỉ gia hạn (`renewal`) được; `open` và `extra` thì 403.
-        Lớp bị admin thu quyền giáo viên (`teacherRevoked`) vẫn mua được, và mua xong thì quyền được mở lại. Lớp bị ẩn thì không mua được (403 `class_hidden`).
+        Lớp bị admin cấm giáo viên (`teacherRevoked`, 403 `class_revoked`) hoặc bị ẩn (403 `class_hidden`) thì không mua được, và mua suất không bỏ lệnh cấm.
+        Lớp hết hạn (`term.status` là `expired`) thì giáo viên chỉ xem; mua suất (mở chính thức, gia hạn) là cách mở lại toàn quyền.
         - `open`: lớp đang dùng thử mở chính thức; chấm dứt dùng thử ngay; số suất ít nhất bằng số học sinh; được giảm theo số suất.
         - `extra`: thêm suất cho lớp đang chạy bằng suất đã mua, dùng tới hết năm học; giá lẻ.
         - `renewal`: gia hạn sang năm học sau (nối ngay sau năm đã trả, hoặc từ bây giờ nếu đã hết hạn); số suất ít nhất bằng số học sinh; giá lẻ; chỉ một lần cho mỗi năm học.
@@ -360,6 +361,7 @@ paths:
       tags: [assignments]
       operationId: removeAssignment
       summary: Bỏ một bài đã giao (giáo viên của lớp)
+      description: Lớp hết hạn thì giáo viên chỉ xem được (409 `class_expired`); gia hạn để thao tác lại.
       parameters:
         - { $ref: "#/components/parameters/ClassId" }
         - name: assignmentId
@@ -371,16 +373,21 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Lớp hết hạn nên giáo viên chỉ xem (`class_expired`)
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
 
   /v1/admin/classes/{classId}/revoke-teacher:
     post:
       tags: [classes]
       operationId: adminRevokeTeacher
-      summary: Thu quyền thao tác của giáo viên trên lớp (admin)
+      summary: Cấm giáo viên thao tác trên lớp (admin)
       description: |
-        Giáo viên vẫn giữ vai trò giáo viên và các lớp khác. Riêng lớp này: không giao bài, không xem kết quả hay học sinh, không xóa học sinh,
-        không soạn giao bài (403 `class_revoked`); học sinh học bình thường. Giáo viên chỉ mua suất (gia hạn, mua thêm) được, và mua xong thì quyền được mở lại;
-        admin cũng trả lại được bằng `restore-teacher`. Cần lý do, ghi vào nhật ký kiểm toán.
+        Dùng khi giáo viên vi phạm. Giáo viên vẫn giữ vai trò giáo viên và các lớp khác. Riêng lớp này: không giao bài, không xem kết quả hay học sinh,
+        không xóa học sinh, không mua suất (403 `class_revoked`); học sinh học bình thường. **Chỉ admin mở lại được** bằng `restore-teacher`: mua suất hay gia hạn
+        không mở lại. Cần lý do, ghi vào nhật ký kiểm toán.
       parameters:
         - { $ref: "#/components/parameters/ClassId" }
       requestBody:
@@ -403,9 +410,9 @@ paths:
     post:
       tags: [classes]
       operationId: adminRestoreTeacher
-      summary: Trả quyền thao tác cho giáo viên trên lớp (admin)
+      summary: Mở lại quyền thao tác cho giáo viên trên lớp (admin)
       description: |
-        Bỏ trạng thái thu quyền của `revoke-teacher`. Cần lý do, ghi vào nhật ký kiểm toán.
+        Bỏ lệnh cấm của `revoke-teacher`; chỉ admin làm được. Cần lý do, ghi vào nhật ký kiểm toán.
       parameters:
         - { $ref: "#/components/parameters/ClassId" }
       requestBody:
@@ -561,6 +568,7 @@ paths:
       tags: [classes]
       operationId: removeStudent
       summary: Xóa một học sinh khỏi lớp (giáo viên của lớp)
+      description: Lớp hết hạn thì giáo viên chỉ xem được (409 `class_expired`); gia hạn để thao tác lại.
       parameters:
         - { $ref: "#/components/parameters/ClassId" }
         - name: studentId
@@ -572,6 +580,11 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Lớp hết hạn nên giáo viên chỉ xem (`class_expired`)
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
 
   /v1/works/{workId}/paper:
     get:
@@ -829,7 +842,7 @@ components:
         createdAt: { type: string, format: date-time }
         term: { $ref: "#/components/schemas/ClassTerm" }
         teacher: { $ref: "#/components/schemas/ClassPerson" }
-        teacherRevoked: { type: boolean, description: Admin đã thu quyền thao tác của giáo viên trên lớp này; mua suất sẽ mở lại. }
+        teacherRevoked: { type: boolean, description: Admin đã cấm giáo viên thao tác trên lớp này; chỉ admin mở lại được. }
         hidden: { type: boolean, description: Admin đã ẩn lớp; học sinh không thấy lớp ẩn. }
         assignments:
           type: array
