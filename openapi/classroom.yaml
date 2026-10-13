@@ -1,11 +1,11 @@
 openapi: 3.1.0
 info:
   title: PkKemis classroom
-  version: 0.1.0
-  summary: Lớp học, suất học và học sinh trong lớp.
+  version: 0.2.0
+  summary: Lớp học, suất học, học sinh, bài giáo viên soạn và bài giao.
   description: |
-    Lát A của M4 (docs/backend/M4-CLASSROOM.md): tạo lớp, vào lớp bằng mã, suất học và hạn dùng, mua thêm suất, gia hạn, rời lớp, xóa học sinh.
-    Bài giáo viên soạn, bài giao và kết quả (lát B, C) chưa có.
+    Lát A và B của M4 (docs/backend/M4-CLASSROOM.md): tạo lớp, vào lớp bằng mã, suất học và hạn dùng, mua thêm suất, gia hạn, rời lớp, xóa học sinh,
+    bài giáo viên soạn (bộ bài tập, đề thi) và giao bài cho lớp. Làm bài của lớp và kết quả (lát C) chưa có.
 
     - Chỉ thêm, không xóa hay đổi nghĩa của trường đã phát hành.
     - Token là access token của identity (xem identity.yaml); service tự kiểm bằng khóa công khai.
@@ -19,6 +19,10 @@ servers:
 security:
   - bearerAuth: []
 tags:
+  - name: works
+    description: Bộ bài tập và đề thi giáo viên tự soạn
+  - name: assignments
+    description: Giao bài cho lớp
   - name: classes
     description: Lớp, mã lớp, học sinh
   - name: seats
@@ -185,6 +189,178 @@ paths:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
 
+  /v1/works:
+    get:
+      tags: [works]
+      operationId: listWorks
+      summary: Bài đã soạn của mình
+      description: Giáo viên thấy bài của mình, admin thấy bài của mọi giáo viên; học sinh không có (403).
+      responses:
+        "200":
+          description: Danh sách theo thứ tự soạn
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Work" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [works]
+      operationId: createWork
+      summary: Soạn một bộ bài tập hoặc đề thi (giáo viên)
+      description: |
+        Máy chủ kiểm kỹ và chỉ giữ các trường nó biết. Tối đa 40 câu; câu lấy từ ngân hàng PkKemis phải thuộc khóa của bài; câu tự soạn có mã bắt đầu bằng `tq-`
+        và đủ phần theo dạng (4 phương án khác nhau và phương án đúng; hoặc 4 ý a đến d có Đúng/Sai; hoặc đáp án số tối đa 4 kí tự, dấu phẩy thập phân).
+        Đề thi cần thời gian (5 đến 180 phút) và điểm đạt (0 đến 100, tức thang 10 nhân 10); bộ bài tập thì không.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WorkInput" }
+      responses:
+        "201":
+          description: Bài vừa soạn
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Work" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v1/works/{workId}:
+    get:
+      tags: [works]
+      operationId: getWork
+      summary: Một bài đã soạn, kèm đáp án (giáo viên của bài hoặc admin)
+      parameters:
+        - { $ref: "#/components/parameters/WorkId" }
+      responses:
+        "200":
+          description: Bài
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Work" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      tags: [works]
+      operationId: updateWork
+      summary: Sửa bài (giáo viên của bài)
+      description: |
+        Thay toàn bộ nội dung. Các bài đã giao theo tên và loại mới của bài. Không đổi khóa học được khi bài đã giao cho lớp (409 `work_in_use`).
+      parameters:
+        - { $ref: "#/components/parameters/WorkId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WorkInput" }
+      responses:
+        "200":
+          description: Bài sau khi sửa
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Work" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Bài đang giao cho lớp nên không đổi khóa (`work_in_use`)
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+    delete:
+      tags: [works]
+      operationId: deleteWork
+      summary: Xóa bài (giáo viên của bài)
+      description: Xóa cả các bài đã giao của nó.
+      parameters:
+        - { $ref: "#/components/parameters/WorkId" }
+      responses:
+        "204": { description: Đã xóa }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/works/{workId}/duplicate:
+    post:
+      tags: [works]
+      operationId: duplicateWork
+      summary: Nhân bản bài để sửa (giáo viên của bài)
+      description: |
+        Bản sao có tên "Bản sao: …"; các câu tự soạn có mã mới nên kết quả của bài gốc vẫn thuộc bài gốc.
+      parameters:
+        - { $ref: "#/components/parameters/WorkId" }
+      responses:
+        "201":
+          description: Bản sao
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Work" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/classes/{classId}/assignments:
+    post:
+      tags: [assignments]
+      operationId: assignWork
+      summary: Giao một bài đã soạn cho lớp (giáo viên của lớp)
+      description: |
+        Chỉ bài của chính giáo viên và soạn cho khóa của lớp. Hạn nộp là ngày từ hôm nay trở đi (theo giờ Việt Nam). Lớp đang tạm khóa chưa giao thêm được (409 `class_expired`).
+        Giao cùng một bài hai lần cho một lớp là được.
+      parameters:
+        - { $ref: "#/components/parameters/ClassId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [workId, dueAt]
+              properties:
+                workId: { type: string, format: uuid }
+                dueAt: { type: string, format: date-time }
+                note: { type: string, maxLength: 200 }
+      responses:
+        "201":
+          description: Bài vừa giao
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Assignment" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Lớp đang tạm khóa (`class_expired`)
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /v1/classes/{classId}/assignments/{assignmentId}:
+    delete:
+      tags: [assignments]
+      operationId: removeAssignment
+      summary: Bỏ một bài đã giao (giáo viên của lớp)
+      parameters:
+        - { $ref: "#/components/parameters/ClassId" }
+        - name: assignmentId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "204": { description: Đã bỏ }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /v1/classes/{classId}/leave:
     post:
       tags: [classes]
@@ -227,6 +403,11 @@ components:
   parameters:
     ClassId:
       name: classId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    WorkId:
+      name: workId
       in: path
       required: true
       schema: { type: string, format: uuid }
@@ -285,6 +466,8 @@ components:
             - trial_limit_reached
             - course_coming_soon
             - invalid_purchase
+            - work_locked
+            - work_in_use
             - too_many_attempts
             - internal_error
         detail: { type: string, description: "Thông báo tiếng Việt, hiển thị được cho người dùng." }
@@ -330,7 +513,7 @@ components:
 
     ClassSummary:
       type: object
-      required: [id, name, grade, schoolYear, teacherId, courseId, joinCode, createdAt, term, teacher]
+      required: [id, name, grade, schoolYear, teacherId, courseId, joinCode, createdAt, term, teacher, assignments]
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
@@ -343,6 +526,12 @@ components:
         createdAt: { type: string, format: date-time }
         term: { $ref: "#/components/schemas/ClassTerm" }
         teacher: { $ref: "#/components/schemas/ClassPerson" }
+        assignments:
+          type: array
+          description: |
+            Bài đã giao cho lớp, hạn nộp gần nhất trước. Giáo viên của lớp và admin luôn thấy; học sinh chỉ thấy khi lớp đang chạy.
+            Chỉ có tên, loại, hạn và lời dặn, không có câu hỏi hay đáp án.
+          items: { $ref: "#/components/schemas/Assignment" }
 
     ClassDetail:
       allOf:
@@ -422,3 +611,91 @@ components:
           properties:
             kind: { type: string, enum: [open, extra, renewal] }
             seats: { type: integer, minimum: 1, maximum: 500 }
+
+    Assignment:
+      type: object
+      required: [id, classId, kind, refId, title, assignedAt, dueAt]
+      properties:
+        id: { type: string, format: uuid }
+        classId: { type: string, format: uuid }
+        kind: { type: string, enum: [exercise, exam] }
+        refId: { type: string, format: uuid, description: Mã bài đã soạn được giao. }
+        title: { type: string, description: Tên của bài; đổi theo khi bài đổi tên. }
+        note: { type: string }
+        assignedAt: { type: string, format: date-time }
+        dueAt: { type: string, format: date-time }
+
+    OwnQuestion:
+      description: Câu giáo viên tự viết. Đủ các trường của dạng câu.
+      type: object
+      required: [id, type, chapterId, topic, level, prompt, explanation]
+      properties:
+        id: { type: string, pattern: "^tq-[a-z0-9-]{1,40}$" }
+        type: { type: string, enum: [single, truefalse, short] }
+        chapterId: { type: string, description: Chương của khóa học của bài. }
+        topic: { type: string, maxLength: 120 }
+        level: { type: string, enum: [biet, hieu, vandung] }
+        prompt: { type: string, maxLength: 2000 }
+        hint: { type: string, maxLength: 2000 }
+        explanation: { type: string, maxLength: 4000 }
+        options:
+          type: array
+          description: Chỉ với `single`; đúng 4 phương án khác nhau.
+          minItems: 4
+          maxItems: 4
+          items: { type: string, maxLength: 500 }
+        answerIndex: { type: integer, minimum: 0, maximum: 3, description: Chỉ với `single`. }
+        statements:
+          type: array
+          description: Chỉ với `truefalse`; đúng 4 ý a đến d.
+          minItems: 4
+          maxItems: 4
+          items:
+            type: object
+            required: [text, answer, explanation]
+            properties:
+              text: { type: string, maxLength: 500 }
+              answer: { type: boolean }
+              explanation: { type: string, maxLength: 1000 }
+        answer: { type: string, description: "Chỉ với `short`: một số tối đa 4 kí tự, dấu phẩy thập phân." }
+
+    WorkItem:
+      oneOf:
+        - type: object
+          required: [source, questionId]
+          properties:
+            source: { const: bank }
+            questionId: { type: string }
+        - type: object
+          required: [source, question]
+          properties:
+            source: { const: own }
+            question: { $ref: "#/components/schemas/OwnQuestion" }
+
+    WorkInput:
+      type: object
+      required: [kind, title, courseId, items]
+      properties:
+        kind: { type: string, enum: [exercise, exam] }
+        title: { type: string, minLength: 1, maxLength: 120 }
+        description: { type: string, maxLength: 2000 }
+        courseId: { type: string }
+        items:
+          type: array
+          minItems: 1
+          maxItems: 40
+          items: { $ref: "#/components/schemas/WorkItem" }
+        durationMinutes: { type: integer, minimum: 5, maximum: 180, description: Chỉ đề thi; bắt buộc với đề thi. }
+        passPercent: { type: number, minimum: 0, maximum: 100, description: Chỉ đề thi; 50 là 5 điểm trên 10. }
+
+    Work:
+      allOf:
+        - $ref: "#/components/schemas/WorkInput"
+        - type: object
+          required: [id, teacherId, handedIn, createdAt, updatedAt]
+          properties:
+            id: { type: string, format: uuid }
+            teacherId: { type: string, format: uuid }
+            handedIn: { type: boolean, description: Đã có học sinh nộp nên không sửa được; có hiệu lực từ lát C. }
+            createdAt: { type: string, format: date-time }
+            updatedAt: { type: string, format: date-time }
