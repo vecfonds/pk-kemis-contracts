@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: PkKemis classroom
-  version: 0.4.0
+  version: 0.5.0
   summary: Lớp học, suất học, học sinh, bài giáo viên soạn, bài giao, làm bài và kết quả.
   description: |
     Lát A và B của M4 (docs/backend/M4-CLASSROOM.md): tạo lớp, vào lớp bằng mã, suất học và hạn dùng, mua thêm suất, gia hạn, rời lớp, xóa học sinh,
@@ -370,6 +370,73 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/admin/classes/{classId}/delete:
+    post:
+      tags: [classes]
+      operationId: adminDeleteClass
+      summary: Xóa một lớp (admin)
+      description: |
+        Xóa lớp cùng học sinh trong lớp, suất, bài giao, bài nộp; bài giáo viên soạn vẫn còn. Không hoàn tác được. Cần lý do, được ghi vào nhật ký kiểm toán
+        của classroom. Chỉ admin; người khác 403.
+      parameters:
+        - { $ref: "#/components/parameters/ClassId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, minLength: 1, maxLength: 500 }
+      responses:
+        "204": { description: Đã xóa }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/admin/audit-log:
+    get:
+      tags: [classes]
+      operationId: listClassroomAuditLog
+      summary: Nhật ký kiểm toán của classroom (admin)
+      description: Các thao tác của admin trên lớp, mới nhất trước. Chỉ đọc.
+      parameters:
+        - name: page
+          in: query
+          schema: { type: integer, minimum: 0, default: 0 }
+        - name: size
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      responses:
+        "200":
+          description: Một trang nhật ký
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, page, size, total]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, actorId, action, classId, className, reason, createdAt]
+                      properties:
+                        id: { type: string, format: uuid }
+                        actorId: { type: string, format: uuid }
+                        action: { type: string, enum: [CLASS_DELETED] }
+                        classId: { type: string, format: uuid }
+                        className: { type: string }
+                        reason: { type: string }
+                        createdAt: { type: string, format: date-time }
+                  page: { type: integer }
+                  size: { type: integer }
+                  total: { type: integer, format: int64 }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
 
   /v1/classes/{classId}/leave:
     post:

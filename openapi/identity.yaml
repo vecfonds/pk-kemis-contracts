@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: PkKemis identity
-  version: 0.3.0
+  version: 0.4.0
   summary: Tài khoản, đăng nhập, token và vai trò.
   description: |
     Đã được chủ dự án duyệt ngày 13/10/2026 (docs/backend/M1-IDENTITY.md).
@@ -325,6 +325,32 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /v1/admin/audit-log:
+    get:
+      tags: [admin]
+      operationId: listAuditLog
+      summary: Nhật ký kiểm toán (admin)
+      description: Các thao tác của admin (đổi vai trò, khóa, mở khóa), mới nhất trước. Chỉ đọc.
+      parameters:
+        - name: action
+          in: query
+          schema: { type: string, enum: [ROLE_CHANGED, ACCOUNT_LOCKED, ACCOUNT_UNLOCKED] }
+        - name: page
+          in: query
+          schema: { type: integer, minimum: 0, default: 0 }
+        - name: size
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      responses:
+        "200":
+          description: Một trang nhật ký
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuditLogPage" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
   /.well-known/jwks.json:
     get:
       tags: [internal]
@@ -442,6 +468,33 @@ components:
           required: [locked]
           properties:
             locked: { type: boolean }
+
+    AuditLogEntry:
+      type: object
+      required: [id, actorId, targetId, action, reason, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        actorId: { type: string, format: uuid }
+        actorName: { type: [string, "null"], description: Họ tên hiện tại của người làm; null nếu tài khoản đã bị xóa. }
+        targetId: { type: string, format: uuid }
+        targetName: { type: [string, "null"] }
+        action: { type: string, enum: [ROLE_CHANGED, ACCOUNT_LOCKED, ACCOUNT_UNLOCKED] }
+        detail:
+          type: [object, "null"]
+          description: Với ROLE_CHANGED có `from` và `to`.
+        reason: { type: string }
+        createdAt: { type: string, format: date-time }
+
+    AuditLogPage:
+      type: object
+      required: [items, page, size, total]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/AuditLogEntry" }
+        page: { type: integer }
+        size: { type: integer }
+        total: { type: integer, format: int64 }
 
     UserSummary:
       type: object
