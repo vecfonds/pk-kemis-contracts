@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: PkKemis learning
-  version: 0.1.0
+  version: 0.2.0
   summary: Bài tập, đề thi, chấm điểm và sổ cái XP.
   description: |
     Giai đoạn 1 (docs/backend/M3-LEARNING.md): bộ bài tập và đề thi, lượt làm bài do máy chủ chấm, XP, cấp độ, chuỗi ngày.
@@ -238,7 +238,7 @@ paths:
         - **Đề thi:** các câu gửi kèm ghi đè bản nháp. Nộp sau giờ (cộng 15 giây du di) thì chỉ chấm bản nháp đã lưu, `timedOut` = true.
         - **Bộ bài tập:** câu đã trả lời qua `/answers` là cuối cùng; câu còn lại có thể gửi kèm.
         - **XP:** chỉ lượt nộp đầu tiên của mỗi bộ hoặc đề được XP. Thưởng hoàn thành: bộ bài tập khi trả lời đủ mọi câu, đề thi khi đạt.
-        - `seconds` do máy khách báo, bị chặn trên bởi thời gian máy chủ đo.
+        - `seconds` do máy khách báo. Lượt vừa bắt đầu (nộp trong vòng 2 phút) được tin, chặn trần 24 giờ (đề thi: thời lượng đề); lượt cũ hơn bị chặn bởi thời gian máy chủ đo. Nộp quá giờ thì tính đúng thời lượng đề.
       parameters:
         - { $ref: "#/components/parameters/AttemptId" }
       requestBody:
@@ -264,13 +264,21 @@ paths:
     get:
       tags: [attempts]
       operationId: listMyAttempts
-      summary: Các lượt làm của mình, mới nhất trước (tối đa 200)
+      summary: Các lượt làm của mình, mới nhất trước (mặc định tối đa 1000, phân trang bằng con trỏ)
       parameters:
         - name: kind
           in: query
           schema: { $ref: "#/components/schemas/AttemptKind" }
         - name: refId
           in: query
+          schema: { type: string }
+        - name: limit
+          in: query
+          description: Số lượt tối đa mỗi trang (1–1000, mặc định 1000).
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 1000 }
+        - name: cursor
+          in: query
+          description: Giá trị `nextCursor` của trang trước; bỏ trống để lấy trang đầu.
           schema: { type: string }
       responses:
         "200":
@@ -284,6 +292,15 @@ paths:
                   items:
                     type: array
                     items: { $ref: "#/components/schemas/AttemptSummary" }
+                  total:
+                    type: integer
+                    description: Tổng số lượt khớp bộ lọc (không tính con trỏ).
+                  truncated:
+                    type: boolean
+                    description: true khi còn lượt cũ hơn chưa trả (có `nextCursor`).
+                  nextCursor:
+                    type: [string, "null"]
+                    description: Con trỏ để lấy trang cũ hơn; null khi đã hết.
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
 
