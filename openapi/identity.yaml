@@ -473,7 +473,7 @@ components:
       type: object
       required: [id, actorId, targetId, action, reason, createdAt]
       properties:
-        id: { type: string, format: uuid }
+        id: { type: string, description: Số thứ tự của dòng nhật ký (chuỗi số). }
         actorId: { type: string, format: uuid }
         actorName: { type: [string, "null"], description: Họ tên hiện tại của người làm; null nếu tài khoản đã bị xóa. }
         targetId: { type: string, format: uuid }
