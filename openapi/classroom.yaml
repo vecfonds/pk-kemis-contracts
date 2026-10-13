@@ -1,11 +1,15 @@
 openapi: 3.1.0
 info:
   title: PkKemis classroom
-  version: 0.7.0
+  version: 0.8.0
   summary: Lớp học, suất học, học sinh, bài giáo viên soạn, bài giao, làm bài và kết quả.
   description: |
     Lát A và B của M4 (docs/backend/M4-CLASSROOM.md): tạo lớp, vào lớp bằng mã, suất học và hạn dùng, mua thêm suất, gia hạn, rời lớp, xóa học sinh,
     bài giáo viên soạn (bộ bài tập, đề thi) và giao bài cho lớp. Lát D: giáo viên bị thu vai trò (identity đổi về học sinh) vẫn thấy các lớp mình đã lập (`formerlyOwned`) và gia hạn được, không làm gì khác. Lát C: học sinh làm bài của lớp (máy chủ chấm lại từ câu trả lời), bài nộp, và kết quả cho giáo viên. Chưa có XP cho bài của lớp.
+
+    0.8.0 (docs/backend/M6-CONTENT.md): danh mục khóa và câu ngân hàng lấy từ learning (L1), câu ngân hàng được chụp vào bài lúc lưu;
+    tiến độ khóa và hoạt động gần nhất của học sinh cho giáo viên (L3); lượt làm bài của lớp ở máy chủ: đề không đáp án, đáp án sau từng câu
+    (bộ bài tập) hoặc sau khi nộp (đề), đồng hồ đề do máy chủ giữ, XP gửi sang learning (L6). Mỗi thao tác mới ghi lát cài nó ở `x-slice`.
 
     - Chỉ thêm, không xóa hay đổi nghĩa của trường đã phát hành.
     - Token là access token của identity (xem identity.yaml); service tự kiểm bằng khóa công khai.
@@ -36,7 +40,10 @@ paths:
       tags: [classes]
       operationId: listCourses
       summary: Các khóa học có thể mở lớp
-      description: Khóa sắp ra mắt (`comingSoon`) chưa mở lớp được vì chưa bán suất.
+      description: |
+        Khóa sắp ra mắt (`comingSoon`) chưa mở lớp được vì chưa bán suất.
+        Từ 0.8.0 (L1) là danh mục của learning (khóa, chương), classroom lưu lại và làm mới tối đa mỗi 60 giây; learning không trả lời thì
+        dùng bản đã lưu.
       responses:
         "200":
           description: Danh sách
@@ -153,6 +160,8 @@ paths:
       description: |
         Giáo viên của lớp và admin thấy thêm danh sách học sinh và các lần mua suất; học sinh trong lớp chỉ thấy phần chung.
         Học sinh không bao giờ thấy email hay ngày sinh của nhau, giáo viên chỉ thấy tên và ảnh đại diện.
+        Từ 0.8.0 (L3) mỗi học sinh trong danh sách có thêm tiến độ khóa của lớp và lần hoạt động gần nhất, lấy từ learning bằng một lời gọi cho
+        cả lớp; learning không trả lời thì lớp vẫn trả về, các trường đó vắng và `progressUnavailable` = true.
       parameters:
         - { $ref: "#/components/parameters/ClassId" }
       responses:
@@ -228,6 +237,8 @@ paths:
         Máy chủ kiểm kỹ và chỉ giữ các trường nó biết. Tối đa 40 câu; câu lấy từ ngân hàng PkKemis phải thuộc khóa của bài; câu tự soạn có mã bắt đầu bằng `tq-`
         và đủ phần theo dạng (4 phương án khác nhau và phương án đúng; hoặc 4 ý a đến d có Đúng/Sai; hoặc đáp án số tối đa 4 kí tự, dấu phẩy thập phân).
         Đề thi cần thời gian (5 đến 180 phút) và điểm đạt (0 đến 100, tức thang 10 nhân 10); bộ bài tập thì không.
+        Từ 0.8.0 (L1): câu ngân hàng được kiểm với learning (có thật, thuộc khóa của bài, chưa nghỉ) và **chụp nguyên câu kèm đáp án vào bài**
+        (`WorkItem.question`); learning không trả lời thì 503 `content_unavailable` (bài chỉ có câu tự soạn vẫn lưu được).
       requestBody:
         required: true
         content:
@@ -242,6 +253,7 @@ paths:
         "400": { $ref: "#/components/responses/ValidationFailed" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
+        "503": { $ref: "#/components/responses/ContentUnavailable" }
 
   /v1/works/{workId}:
     get:
@@ -265,6 +277,7 @@ paths:
       description: |
         Thay toàn bộ nội dung. Các bài đã giao theo tên và loại mới của bài. Không đổi khóa học được khi bài đã giao cho lớp (409 `work_in_use`).
         Khi đã có học sinh nộp bài thì câu hỏi và thông số được giữ nguyên để kết quả khớp với đề (409 `work_locked`); muốn đổi, nhân bản rồi sửa bản sao.
+        Từ 0.8.0 (L1): câu ngân hàng được chụp lại như khi soạn mới (lấy bản hiện tại của learning); 503 `content_unavailable` như trên.
       parameters:
         - { $ref: "#/components/parameters/WorkId" }
       requestBody:
@@ -282,6 +295,7 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/ContentUnavailable" }
         "409":
           description: Bài đang giao cho lớp nên không đổi khóa (`work_in_use`), hoặc đã có học sinh nộp (`work_locked`)
           content:
@@ -591,10 +605,14 @@ paths:
       tags: [submissions]
       operationId: getWorkPaper
       summary: Đề của một bài giao cho mình (học sinh)
+      deprecated: true
       description: |
         Chỉ học sinh của một lớp còn chạy (không tạm khóa) đã được giao bài này; khác đi là 404 (không phải bài giao cho mình) hoặc 409 `class_expired`
         (mọi lớp được giao đều đã hết hạn). Đề kèm đáp án để màn hình luyện tập chấm ngay từng câu; **máy chủ không tin điểm máy khách tính**, chỉ lưu điểm
         nó tự chấm lại từ câu trả lời gửi lên. Giới hạn đáp án lộ ra trình duyệt: xem docs/backend/M4-CLASSROOM.md.
+
+        **Bỏ từ 0.8.0** (L6): trả đáp án cho học sinh. Dùng `GET /v1/works/{workId}/sheet` và `/v1/works/{workId}/runs`. Web thôi gọi ở L6;
+        gỡ hẳn khi chủ dự án đồng ý (docs/backend/M6-CONTENT.md, câu hỏi 8). Không bao giờ mở ra ngoài mạng nội bộ.
       parameters:
         - { $ref: "#/components/parameters/WorkId" }
       responses:
@@ -617,7 +635,11 @@ paths:
       tags: [submissions]
       operationId: submitWorkAttempt
       summary: Nộp một lần làm bài (học sinh)
+      deprecated: true
       description: |
+        **Bỏ từ 0.8.0** (L6): không có đồng hồ đề, không giấu đáp án. Dùng `/v1/works/{workId}/runs` và `/v1/runs/**`. Web thôi gọi ở L6;
+        gỡ hẳn khi chủ dự án đồng ý. Trong lúc còn, lần nộp ở đây cũng được gửi sang learning như lượt làm (XP lần đầu, sổ tay lỗi sai).
+
         Máy chủ chấm lại từ câu trả lời. Lần làm đầu tiên của học sinh ở mỗi bài giao là **bài nộp** của bài giao đó (các lần sau chỉ để luyện, không đổi bài nộp);
         nếu bài được giao cho nhiều lớp của học sinh thì lần đầu nộp cho tất cả. Lớp đang dùng thử: tối đa 5 lần mỗi bài (409 `attempt_limit_reached`);
         có lớp đã mua suất thì không giới hạn. Nộp quá hạn vẫn được, bài nộp được tính là nộp muộn.
@@ -705,6 +727,210 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  # ------------------------------------------------------------------ 0.8.0: lượt làm bài của lớp ở máy chủ (L6)
+
+  /v1/works/{workId}/sheet:
+    get:
+      tags: [submissions]
+      operationId: getWorkSheet
+      x-slice: L6
+      summary: Trang làm bài của một bài giao cho mình, không có đáp án (học sinh)
+      description: |
+        Thay `GET /v1/works/{workId}/paper`. Quyền như `/paper` (404 khi không phải bài giao cho mình, 409 `class_expired` khi mọi lớp được
+        giao đều tạm khóa). Bộ bài tập có `questions` (không đáp án) để hiện ngay; **đề thi không có câu nào** cho tới khi bắt đầu lượt làm
+        (đồng hồ chạy từ lúc thấy đề), chỉ có số câu từng phần. `openRunId` là lượt đang làm dở (nếu có), để tải lại trang thì làm tiếp.
+      parameters:
+        - { $ref: "#/components/parameters/WorkId" }
+      responses:
+        "200":
+          description: Trang làm bài
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WorkSheet" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Mọi lớp được giao bài đều tạm khóa (`class_expired`)
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /v1/works/{workId}/runs:
+    post:
+      tags: [submissions]
+      operationId: startWorkRun
+      x-slice: L6
+      summary: Bắt đầu làm một bài giao cho mình, hoặc làm tiếp lượt đang dở (học sinh)
+      description: |
+        Mỗi học sinh một lượt đang mở cho mỗi bài: gọi lại thì trả lượt đó (200), đồng hồ không bắt đầu lại. Quyền và số lần như
+        `POST /v1/works/{workId}/attempts`: lớp dùng thử tối đa 5 lần **đã nộp** (409 `attempt_limit_reached` khi bắt đầu lượt mới),
+        lớp đã mua suất không giới hạn; lớp tạm khóa 409 `class_expired`.
+        - Đề thi: `deadline` = giờ bắt đầu + thời gian đề. Lượt quá `deadline` + 15 giây được chấm từ bản nháp và **tính là một lần làm**
+          (việc định kỳ mỗi phút, và khi học sinh bắt đầu lại hay mở lượt đó).
+        - Đề của lượt cố định từ lúc bắt đầu (`questions`, không đáp án), kể cả khi giáo viên nhân bản hay sửa bài sau đó.
+      parameters:
+        - { $ref: "#/components/parameters/WorkId" }
+      responses:
+        "200":
+          description: Lượt đang mở được làm tiếp
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WorkRun" }
+        "201":
+          description: Lượt mới
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WorkRun" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Hết lượt (`attempt_limit_reached`) hoặc mọi lớp tạm khóa (`class_expired`)
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /v1/runs/{runId}:
+    get:
+      tags: [submissions]
+      operationId: getWorkRun
+      x-slice: L6
+      summary: Một lượt làm bài của lớp của mình
+      description: |
+        Đang mở thì trả `WorkRun`, đã nộp thì `RunResult`. Đề quá `deadline` + 15 giây được chấm trước rồi trả `RunResult`.
+        Lượt của người khác giống như không tồn tại (404).
+      parameters:
+        - { $ref: "#/components/parameters/RunId" }
+      responses:
+        "200":
+          description: Lượt làm
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/WorkRun" }
+                  - { $ref: "#/components/schemas/RunResult" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/runs/{runId}/answers:
+    post:
+      tags: [submissions]
+      operationId: answerWorkRunQuestion
+      x-slice: L6
+      summary: Trả lời một câu của bộ bài tập của lớp và xem đáp án ngay
+      description: |
+        Chỉ bộ bài tập; đề thi 409 `not_available_during_exam`. Mỗi câu trả lời một lần mỗi lượt (409 `already_answered`). Câu phải trả lời đủ
+        các phần, không thì 400 `validation_failed`. Lượt đã nộp: 409 `attempt_closed`.
+      parameters:
+        - { $ref: "#/components/parameters/RunId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [questionId, answer]
+              properties:
+                questionId: { type: string }
+                answer: { $ref: "#/components/schemas/QuestionAnswer" }
+      responses:
+        "200":
+          description: Kết quả câu vừa trả lời, kèm đáp án và lời giải
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [questionId, mark, reveal]
+                properties:
+                  questionId: { type: string }
+                  mark: { $ref: "#/components/schemas/Mark" }
+                  reveal: { $ref: "#/components/schemas/Reveal" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Đã trả lời câu này (`already_answered`), lượt đã nộp (`attempt_closed`) hoặc là đề thi (`not_available_during_exam`)
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /v1/runs/{runId}/draft:
+    put:
+      tags: [submissions]
+      operationId: saveWorkRunDraft
+      x-slice: L6
+      summary: Lưu bài đề thi của lớp đang làm dở
+      description: |
+        Chỉ đề thi (bộ bài tập lưu từng câu qua `/answers`: 400 `validation_failed`). Gộp câu trả lời vào bản nháp; `flags` thay danh sách cũ
+        khi gửi. Quá `deadline` + 15 giây hoặc đã nộp: 409 `attempt_closed`.
+      parameters:
+        - { $ref: "#/components/parameters/RunId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [answers]
+              properties:
+                answers: { $ref: "#/components/schemas/RunAnswerList" }
+                flags: { type: array, maxItems: 40, items: { type: string } }
+      responses:
+        "204": { description: Đã lưu }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Hết giờ hoặc đã nộp (`attempt_closed`)
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /v1/runs/{runId}/submit:
+    post:
+      tags: [submissions]
+      operationId: submitWorkRun
+      x-slice: L6
+      summary: Nộp lượt làm bài của lớp
+      description: |
+        Máy chủ chấm và ghi lần làm như `POST /v1/works/{workId}/attempts` (lần làm đầu ở mỗi bài giao là bài nộp, nộp muộn được tính muộn).
+        Nộp lại cùng lượt trả đúng kết quả cũ.
+        - Đề thi: câu gửi kèm ghi đè bản nháp; nộp sau `deadline` + 15 giây thì chỉ chấm bản nháp (`timedOut`). `seconds` cắt về thời gian thật
+          máy chủ đo.
+        - Bộ bài tập: câu đã trả lời qua `/answers` là cuối cùng; câu còn lại có thể gửi kèm.
+        - **XP** do learning quyết (lần nộp đầu của mỗi bài, có trần mỗi ngày): classroom gửi kết quả sang learning trong cùng thao tác (chờ
+          tối đa 2 giây). Learning trả lời kịp thì có `xp`; không thì `xp` là null và XP được cộng sau (gửi lại tự động).
+      parameters:
+        - { $ref: "#/components/parameters/RunId" }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                answers: { $ref: "#/components/schemas/RunAnswerList" }
+                seconds: { type: number, minimum: 0 }
+      responses:
+        "200":
+          description: Kết quả
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RunResult" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Mọi lớp tạm khóa trước khi nộp (`class_expired`)
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
 components:
   securitySchemes:
     bearerAuth:
@@ -724,8 +950,18 @@ components:
       in: path
       required: true
       schema: { type: string, format: uuid }
+    RunId:
+      name: runId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
 
   responses:
+    ContentUnavailable:
+      description: Chưa lấy được câu ngân hàng từ learning (`content_unavailable`); thử lại sau
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
     ValidationFailed:
       description: Dữ liệu gửi lên không hợp lệ (`validation_failed`), kèm lỗi từng trường
       content:
@@ -786,6 +1022,10 @@ components:
             - class_revoked
             - class_hidden
             - internal_error
+            - content_unavailable
+            - attempt_closed
+            - already_answered
+            - not_available_during_exam
         detail: { type: string, description: "Thông báo tiếng Việt, hiển thị được cho người dùng." }
         errors:
           type: array
@@ -870,6 +1110,22 @@ components:
                     required: [joinedAt]
                     properties:
                       joinedAt: { type: string, format: date-time }
+                      courseProgress:
+                        type: integer
+                        minimum: 0
+                        maximum: 100
+                        description: "0.8.0 (L3): phần trăm bài đã xong của khóa của lớp (lấy từ learning). Vắng khi chưa lấy được."
+                      completedLessons: { type: integer, minimum: 0, description: "0.8.0 (L3)." }
+                      totalLessons: { type: integer, minimum: 0, description: "0.8.0 (L3)." }
+                      lastActiveAt:
+                        type: [string, "null"]
+                        format: date-time
+                        description: "0.8.0 (L3): lần hoạt động gần nhất (học trên learning hoặc nộp bài của lớp); null là chưa có. Vắng khi chưa lấy được."
+            progressUnavailable:
+              type: boolean
+              description: |
+                0.8.0 (L3): true khi lớp có học sinh mà chưa lấy được tiến độ từ learning; khi đó các trường tiến độ của học sinh vắng.
+                Giáo viên chỉ thấy tiến độ của khóa của lớp và thời điểm hoạt động, không thấy chi tiết bài hay câu.
 
     License:
       type: object
@@ -984,6 +1240,13 @@ components:
           properties:
             source: { const: bank }
             questionId: { type: string }
+            question:
+              readOnly: true
+              description: |
+                0.8.0 (L1): bản chụp câu ngân hàng (kèm đáp án) lúc lưu bài; máy chủ tự điền, gửi lên thì bị bỏ qua. Chấm, xem bài và
+                "câu sai nhiều nhất" dùng bản này, nên admin sửa câu sau đó không đổi bài đã soạn.
+              allOf:
+                - $ref: "#/components/schemas/PaperQuestion"
         - type: object
           required: [source, question]
           properties:
@@ -1135,3 +1398,200 @@ components:
         wrongQuestionIds:
           type: array
           items: { type: string }
+
+    # ---------------------------------------------------------------- 0.8.0 (L6)
+
+    PublicQuestion:
+      description: Câu như học sinh thấy trước khi trả lời (ngân hàng hoặc tự soạn), không có đáp án và lời giải. Cùng dạng với learning.yaml.
+      type: object
+      required: [id, type, chapterId, topic, level, prompt]
+      properties:
+        id: { type: string }
+        type: { type: string, enum: [single, truefalse, short] }
+        chapterId: { type: string }
+        lessonId: { type: string }
+        topic: { type: string }
+        level: { type: string, enum: [biet, hieu, vandung] }
+        prompt: { type: string }
+        hint: { type: string, description: "Bước đầu của lời giải, không lộ đáp án." }
+        tool:
+          type: object
+          required: [href, label]
+          properties:
+            href: { type: string }
+            label: { type: string }
+        options:
+          type: array
+          items: { type: string }
+          description: Chỉ với `single`.
+        statements:
+          type: array
+          description: Chỉ với `truefalse`.
+          items:
+            type: object
+            required: [text]
+            properties:
+              text: { type: string }
+
+    Mark:
+      description: Điểm của một câu (cùng dạng với learning.yaml).
+      type: object
+      required: [earned, max, share, correct, complete]
+      properties:
+        earned: { type: integer, description: 1/100 điểm đạt được. }
+        max: { type: integer }
+        share: { type: number, minimum: 0, maximum: 1, description: Phần trả lời đúng (phần II là số ý đúng chia 4). }
+        correct: { type: boolean }
+        complete: { type: boolean, description: Đã trả lời đủ mọi phần của câu. }
+        statementsRight: { type: integer, description: Chỉ với phần II. }
+
+    Reveal:
+      description: Đáp án và lời giải (cùng dạng với learning.yaml), chỉ có sau khi câu được trả lời (bộ bài tập) hoặc sau khi nộp (đề).
+      oneOf:
+        - type: object
+          required: [type, answerIndex, explanation]
+          properties:
+            type: { const: single }
+            answerIndex: { type: integer }
+            explanation: { type: string }
+        - type: object
+          required: [type, statements, explanation]
+          properties:
+            type: { const: truefalse }
+            statements:
+              type: array
+              items:
+                type: object
+                required: [answer, explanation]
+                properties:
+                  answer: { type: boolean }
+                  explanation: { type: string }
+            explanation: { type: string }
+        - type: object
+          required: [type, answer, explanation]
+          properties:
+            type: { const: short }
+            answer: { type: string }
+            explanation: { type: string }
+
+    RunAnswerList:
+      type: array
+      maxItems: 40
+      items:
+        type: object
+        required: [questionId, answer]
+        properties:
+          questionId: { type: string }
+          answer: { $ref: "#/components/schemas/QuestionAnswer" }
+
+    CheckedAnswer:
+      type: object
+      required: [questionId, answer, mark, reveal]
+      properties:
+        questionId: { type: string }
+        answer: { $ref: "#/components/schemas/QuestionAnswer" }
+        mark: { $ref: "#/components/schemas/Mark" }
+        reveal: { $ref: "#/components/schemas/Reveal" }
+
+    WorkSheet:
+      type: object
+      required: [workId, kind, title, courseId, questionCount, parts, attemptsUsed, attemptLimit, firstAttempt, openRunId, assignments]
+      properties:
+        workId: { type: string, format: uuid }
+        kind: { type: string, enum: [exercise, exam] }
+        title: { type: string }
+        description: { type: string }
+        courseId: { type: string }
+        durationMinutes: { type: integer }
+        passPercent: { type: number }
+        questionCount: { type: integer }
+        parts:
+          type: array
+          minItems: 3
+          maxItems: 3
+          items: { type: integer, minimum: 0 }
+          description: Số câu phần I, II, III.
+        questions:
+          type: array
+          description: Chỉ với bộ bài tập, không có đáp án. Đề thi không có (đề chỉ hiện khi bắt đầu lượt làm).
+          items: { $ref: "#/components/schemas/PublicQuestion" }
+        attemptsUsed: { type: integer, minimum: 0, description: Số lần mình đã nộp bài này (tính như `WorkPaper.attemptsUsed`). }
+        attemptLimit: { type: [integer, "null"], description: Số lần tối đa; null là không giới hạn. }
+        firstAttempt: { type: boolean, description: "Chưa nộp lần nào: lần nộp tới được XP (learning quyết, có trần mỗi ngày)." }
+        openRunId: { type: [string, "null"], format: uuid, description: "Lượt đang làm dở, nếu có." }
+        assignments:
+          type: array
+          description: Các bài giao của bài này ở các lớp còn chạy của mình.
+          items: { $ref: "#/components/schemas/Assignment" }
+
+    WorkRun:
+      description: Một lượt đang làm bài của lớp.
+      type: object
+      required: [id, workId, kind, title, status, startedAt, deadline, serverNow, questions, draft, flags, checked, attemptsUsed, attemptLimit, firstAttempt, assignments]
+      properties:
+        id: { type: string, format: uuid }
+        workId: { type: string, format: uuid }
+        kind: { type: string, enum: [exercise, exam] }
+        title: { type: string }
+        status: { const: in_progress }
+        startedAt: { type: string, format: date-time }
+        deadline: { type: [string, "null"], format: date-time, description: Chỉ đề thi; giờ máy chủ quyết định hết giờ. }
+        serverNow: { type: string, format: date-time, description: "Giờ máy chủ lúc trả lời, để trình duyệt đếm ngược đúng." }
+        durationMinutes: { type: integer }
+        passPercent: { type: number }
+        questions:
+          type: array
+          description: Đề của lượt (cố định từ lúc bắt đầu), không có đáp án.
+          items: { $ref: "#/components/schemas/PublicQuestion" }
+        draft:
+          type: object
+          description: Đề thi, câu trả lời đã lưu theo mã câu.
+          additionalProperties: { $ref: "#/components/schemas/QuestionAnswer" }
+        flags:
+          type: array
+          items: { type: string }
+          description: Đề thi, các câu đang đánh dấu xem lại.
+        checked:
+          type: array
+          description: Bộ bài tập, các câu đã trả lời kèm điểm và đáp án.
+          items: { $ref: "#/components/schemas/CheckedAnswer" }
+        attemptsUsed: { type: integer, minimum: 0, description: Số lần đã nộp trước lượt này. }
+        attemptLimit: { type: [integer, "null"] }
+        firstAttempt: { type: boolean, description: Lượt này là lần nộp đầu tiên ở bài (được XP). }
+        assignments:
+          type: array
+          items: { $ref: "#/components/schemas/Assignment" }
+
+    RunResult:
+      description: Kết quả một lượt đã nộp; có mọi trường của `AttemptResult` (với `attemptId` bằng mã lượt) và thêm đáp án từng câu, XP.
+      allOf:
+        - $ref: "#/components/schemas/AttemptResult"
+        - type: object
+          required: [id, workId, kind, title, status, startedAt, submittedAt, timedOut, questions, xp, firstAttempt, xpCapped]
+          properties:
+            id: { type: string, format: uuid, description: Mã lượt (bằng `attemptId`). }
+            workId: { type: string, format: uuid }
+            kind: { type: string, enum: [exercise, exam] }
+            title: { type: string }
+            status: { const: submitted }
+            startedAt: { type: string, format: date-time }
+            submittedAt: { type: string, format: date-time }
+            timedOut: { type: boolean, description: Nộp quá giờ nên chỉ chấm bản nháp đã lưu. }
+            questions:
+              type: array
+              items:
+                type: object
+                required: [questionId, answer, mark, reveal]
+                properties:
+                  questionId: { type: string }
+                  answer:
+                    oneOf:
+                      - { $ref: "#/components/schemas/QuestionAnswer" }
+                      - { type: "null" }
+                  mark: { $ref: "#/components/schemas/Mark" }
+                  reveal: { $ref: "#/components/schemas/Reveal" }
+            xp:
+              type: [integer, "null"]
+              description: XP learning đã cộng cho lượt này; null khi learning chưa xác nhận (sẽ cộng sau). 0 với lần làm lại.
+            firstAttempt: { type: boolean }
+            xpCapped: { type: boolean, description: XP bị cắt vì đã chạm trần mỗi ngày của bài lớp. }

@@ -1,11 +1,14 @@
 openapi: 3.1.0
 info:
   title: PkKemis learning
-  version: 0.2.0
-  summary: Bài tập, đề thi, chấm điểm và sổ cái XP.
+  version: 0.3.0
+  summary: Nội dung học, bài tập, đề thi, chấm điểm, sổ cái XP, tiến độ, sổ tay lỗi sai, bảng xếp hạng.
   description: |
     Giai đoạn 1 (docs/backend/M3-LEARNING.md): bộ bài tập và đề thi, lượt làm bài do máy chủ chấm, XP, cấp độ, chuỗi ngày.
-    Nội dung học (khóa, bài), sổ tay lỗi sai, bảng xếp hạng, quyền riêng tư chưa có.
+
+    0.3.0 (docs/backend/M6-CONTENT.md): learning sở hữu nội dung học (khóa, chương, bài, ngân hàng câu, bộ bài tập, đề) và công cụ
+    soạn của admin; tiến độ bài học; Luyện tập nhanh của bài, luyện nhanh và ôn tập đi qua lượt làm; sổ tay lỗi sai; bảng xếp hạng;
+    API nội bộ cho classroom. Mỗi thao tác mới ghi lát cài nó ở `x-slice` (L1–L7); trước lát đó thao tác chưa có.
 
     - Chỉ thêm, không xóa hay đổi nghĩa của trường đã phát hành.
     - Token là access token của identity (xem identity.yaml); service tự kiểm bằng khóa công khai, không gọi identity.
@@ -13,6 +16,10 @@ info:
     - **Đáp án không rời service trước khi nộp:** đề gửi xuống không có đáp án và lời giải; bộ bài tập trả đáp án của từng câu
       ngay sau khi câu đó được trả lời; đề thi trả đáp án sau khi nộp.
     - Lỗi theo RFC 9457 (`application/problem+json`), cùng dạng với identity.
+    - Nội dung học không theo chế độ Normal hay Tu tiên: không trường nào ở đây đổi theo chế độ hiển thị.
+    - Nội dung có phiên bản (`version`, tăng ở mọi lần admin lưu). Các thao tác đọc nội dung trả `ETag: "<version>"`; gửi `If-None-Match`
+      đúng phiên bản thì nhận 304.
+    - `/internal/**` chỉ cho service khác (khóa `X-Internal-Key`), không mở ra ngoài; sai hoặc thiếu khóa là 403.
 servers:
   - url: http://learning:8080
     description: Mạng Docker Compose (giai đoạn 1, chưa có gateway)
@@ -25,6 +32,20 @@ tags:
     description: Làm bài, chấm điểm, XP
   - name: progress
     description: XP, cấp độ, chuỗi ngày
+  - name: courses
+    description: Khóa học, chương, bài học, câu không kèm đáp án (mọi vai trò)
+  - name: bank
+    description: Ngân hàng câu hỏi kèm đáp án (giáo viên, admin)
+  - name: lessons
+    description: Tiến độ bài học của học sinh
+  - name: mistakes
+    description: Sổ tay lỗi sai
+  - name: leaderboard
+    description: Bảng xếp hạng XP
+  - name: admin
+    description: Soạn nội dung (admin)
+  - name: internal
+    description: Chỉ service gọi nhau (X-Internal-Key); không mở ra ngoài
 
 paths:
   /v1/exercise-sets:
@@ -32,9 +53,14 @@ paths:
       tags: [content]
       operationId: listExerciseSets
       summary: Các bộ bài tập
+      description: Từ 0.3.0 (L1) đọc từ nội dung admin soạn; bộ đã gỡ không có. Hỗ trợ `If-None-Match`.
+      parameters:
+        - { $ref: "#/components/parameters/IfNoneMatch" }
       responses:
         "200":
           description: Danh sách
+          headers:
+            ETag: { $ref: "#/components/headers/ETag" }
           content:
             application/json:
               schema:
@@ -44,6 +70,7 @@ paths:
                   items:
                     type: array
                     items: { $ref: "#/components/schemas/ExerciseSetSummary" }
+        "304": { $ref: "#/components/responses/NotModified" }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
   /v1/exercise-sets/{setId}:
@@ -67,9 +94,14 @@ paths:
       tags: [content]
       operationId: listExams
       summary: Các đề thi
+      description: Từ 0.3.0 (L1) đọc từ nội dung admin soạn; đề đã gỡ không có. Hỗ trợ `If-None-Match`.
+      parameters:
+        - { $ref: "#/components/parameters/IfNoneMatch" }
       responses:
         "200":
           description: Danh sách
+          headers:
+            ETag: { $ref: "#/components/headers/ETag" }
           content:
             application/json:
               schema:
@@ -79,6 +111,7 @@ paths:
                   items:
                     type: array
                     items: { $ref: "#/components/schemas/ExamSummary" }
+        "304": { $ref: "#/components/responses/NotModified" }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
   /v1/exams/{examId}:
@@ -86,6 +119,10 @@ paths:
       tags: [content]
       operationId: getExam
       summary: Một đề thi kèm các câu hỏi (không có đáp án)
+      description: |
+        Từ 0.3.0 (L4) web không gọi thao tác này cho học sinh trước khi bắt đầu: đề đến cùng lượt làm (`OpenAttempt.questions`) để đồng hồ
+        chạy từ lúc thấy đề; trang giới thiệu dùng `ExamSummary`. Hạn chế thao tác này với học sinh là thay đổi phá vỡ, chờ chủ dự án
+        (docs/backend/M6-CONTENT.md, câu hỏi 8).
       parameters:
         - { $ref: "#/components/parameters/ExamId" }
       responses:
@@ -106,6 +143,22 @@ paths:
         Mỗi học sinh chỉ có một lượt đang mở cho mỗi bộ hoặc đề: gọi lại thì trả lượt đó (200), đồng hồ không bắt đầu lại.
         Tối đa 5 lượt đã nộp cho mỗi bộ hoặc đề. Đề thi bỏ dở quá giờ được chấm ngay khi học sinh bắt đầu lại và tính là một lượt.
         Đề chưa đến giờ mở trả 409 `exam_not_open`.
+
+        Từ 0.3.0:
+        - **Đề ghim lúc bắt đầu** (L1): các câu của lượt cố định từ lúc bắt đầu; admin thêm bớt câu sau đó không đổi lượt đang làm.
+          `OpenAttempt.questions` trả đề đó, không kèm đáp án.
+        - **Loại mới** (L4: `lesson`, `quick`; L5: `review`), không giới hạn số lượt:
+          - `lesson`: Luyện tập nhanh của một bài, `refId` là mã bài. Một lượt mở mỗi bài (gọi lại thì làm tiếp).
+          - `quick`: luyện nhanh; `refId` gửi `quick`, phạm vi trong `quick`. Máy chủ rút ngẫu nhiên tối đa `quick.count` câu đang dùng
+            khớp phạm vi. **Luôn tạo lượt mới (201):** lượt `quick` đang mở của học sinh có câu đã trả lời thì được nộp tự động (giữ XP),
+            chưa có câu nào thì bị bỏ.
+          - `review`: ôn sổ tay lỗi sai; `refId` gửi `review`, chế độ trong `review`. Một lượt mở mỗi học sinh; gọi lại cùng chế độ thì làm
+            tiếp, khác chế độ thì lượt cũ được nộp hoặc bỏ như `quick`. Câu của lượt là các mục đến hạn (`due`, sớm nhất trước) hoặc mọi mục
+            chưa nhớ (`all`) lúc bắt đầu.
+        - Bộ, đề, bài thuộc khóa sắp ra mắt: 409 `course_coming_soon`. Không có câu nào để làm (bài không có Luyện tập nhanh, phạm vi luyện
+          nhanh không có câu, sổ tay không có mục đến hạn): 409 `no_questions`.
+        - Đề thi quá `deadline` + 15 giây được coi là đã nộp ở mọi nơi: việc định kỳ mỗi phút chấm nó từ bản nháp (L4), và mọi thao tác đọc
+          hay bắt đầu lại cũng chấm nó trước.
       requestBody:
         required: true
         content:
@@ -127,7 +180,9 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409":
-          description: Hết lượt (`attempt_limit_reached`) hoặc đề chưa mở (`exam_not_open`)
+          description: |
+            Hết lượt (`attempt_limit_reached`), đề chưa mở (`exam_not_open`), khóa sắp ra mắt (`course_coming_soon`, 0.3.0)
+            hoặc không có câu để làm (`no_questions`, 0.3.0)
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
@@ -137,7 +192,9 @@ paths:
       tags: [attempts]
       operationId: getAttempt
       summary: Một lượt làm của mình
-      description: Đang mở thì trả `OpenAttempt`, đã nộp thì trả `AttemptResult`. Lượt của người khác giống như không tồn tại (404).
+      description: |
+        Đang mở thì trả `OpenAttempt`, đã nộp thì trả `AttemptResult`. Lượt của người khác giống như không tồn tại (404).
+        Từ 0.3.0: đề thi đã quá `deadline` + 15 giây được chấm từ bản nháp trước rồi trả `AttemptResult` (`timedOut` = true).
       parameters:
         - { $ref: "#/components/parameters/AttemptId" }
       responses:
@@ -162,6 +219,7 @@ paths:
         Chỉ cho đề thi. Gộp các câu trả lời vào bản nháp trên máy chủ để tải lại trang vẫn làm tiếp, và để bài vẫn được chấm
         nếu học sinh đóng tab. Quá giờ (cộng 15 giây du di) thì trả 409 `attempt_closed`.
         Bộ bài tập lưu từng câu qua `/answers`.
+        Từ 0.3.0 (L4): `flags` (các câu học sinh đánh dấu xem lại) được lưu cùng, thay cả danh sách cũ khi gửi; `OpenAttempt.flags` trả lại.
       parameters:
         - { $ref: "#/components/parameters/AttemptId" }
       requestBody:
@@ -173,6 +231,11 @@ paths:
               required: [answers]
               properties:
                 answers: { $ref: "#/components/schemas/AnswerList" }
+                flags:
+                  type: array
+                  maxItems: 60
+                  items: { type: string }
+                  description: Mã các câu đang được đánh dấu (0.3.0). Vắng thì giữ danh sách cũ.
       responses:
         "204": { description: Đã lưu }
         "400": { $ref: "#/components/responses/ValidationFailed" }
@@ -193,6 +256,14 @@ paths:
       description: |
         Chỉ cho bộ bài tập. Mỗi câu chỉ trả lời một lần trong một lượt (409 `already_answered`), để không thử lần lượt từng phương án.
         Đề thi trả 409 `not_available_during_exam`: đáp án chỉ có sau khi nộp.
+
+        Từ 0.3.0 cũng cho `lesson`, `quick` (L4) và `review` (L5). Câu phải trả lời đủ các phần (trắc nghiệm đã chọn, đủ 4 ý Đúng/Sai,
+        có đáp án số), không thì 400 `validation_failed`. Phản hồi có thêm:
+        - `xp`: XP câu này mang lại khi lượt được nộp (0 nếu không phải lượt đầu của bộ, hoặc với `lesson`/`quick` câu đã từng được trả lời
+          trước đây). Chỉ để hiện "+XP" trong lúc làm; XP thật ghi khi nộp.
+        - `fresh`: câu chưa từng được học sinh trả lời trước lượt này (`lesson`, `quick`).
+        - `mistake` (L5): câu chưa đúng hoàn toàn thì được ghi vào sổ tay lỗi sai và trả mục đó; ở `review` chế độ `due` là mục sau khi
+          dời lịch ôn. `null` khi không đổi gì.
       parameters:
         - { $ref: "#/components/parameters/AttemptId" }
       requestBody:
@@ -217,6 +288,13 @@ paths:
                   questionId: { type: string }
                   mark: { $ref: "#/components/schemas/Mark" }
                   reveal: { $ref: "#/components/schemas/Reveal" }
+                  xp: { type: integer, minimum: 0, description: "0.3.0: XP câu này mang lại khi nộp lượt." }
+                  fresh: { type: boolean, description: "0.3.0: câu chưa từng được trả lời trước lượt này." }
+                  mistake:
+                    description: "0.3.0 (L5): mục sổ tay lỗi sai vừa ghi hoặc vừa dời lịch; null khi không đổi."
+                    oneOf:
+                      - { $ref: "#/components/schemas/MistakeEntry" }
+                      - { type: "null" }
         "400": { $ref: "#/components/responses/ValidationFailed" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -239,6 +317,13 @@ paths:
         - **Bộ bài tập:** câu đã trả lời qua `/answers` là cuối cùng; câu còn lại có thể gửi kèm.
         - **XP:** chỉ lượt nộp đầu tiên của mỗi bộ hoặc đề được XP. Thưởng hoàn thành: bộ bài tập khi trả lời đủ mọi câu, đề thi khi đạt.
         - `seconds` do máy khách báo. Lượt vừa bắt đầu (nộp trong vòng 2 phút) được tin, chặn trần 24 giờ (đề thi: thời lượng đề); lượt cũ hơn bị chặn bởi thời gian máy chủ đo. Nộp quá giờ thì tính đúng thời lượng đề.
+
+        Từ 0.3.0, với `lesson`, `quick` (L4) và `review` (L5): chỉ câu đã trả lời qua `/answers` được tính, `answers` gửi kèm bị bỏ qua.
+        - `lesson`: mỗi câu chưa từng được trả lời trước lượt này được làm tròn(phần đúng × 10) XP; thêm 20 khi mọi câu của lượt đều mới
+          và đã trả lời đủ.
+        - `quick`: mỗi câu chưa từng được trả lời được làm tròn(phần đúng × 10) XP; không có thưởng.
+        - `review` chế độ `due`: 5 XP mỗi câu đúng, thêm 10 cho mỗi câu thành "đã nhớ" (`remembered`); chế độ `all`: 0 XP, lịch ôn giữ nguyên.
+        Đề thi (L4): câu đã trả lời ít nhất một phần mà chưa đúng hoàn toàn được ghi vào sổ tay lỗi sai (L5); câu bỏ trống không ghi.
       parameters:
         - { $ref: "#/components/parameters/AttemptId" }
       requestBody:
@@ -265,6 +350,9 @@ paths:
       tags: [attempts]
       operationId: listMyAttempts
       summary: Các lượt làm của mình, mới nhất trước (mặc định tối đa 1000, phân trang bằng con trỏ)
+      description: |
+        Không lọc theo `kind` thì chỉ có lượt `exercise` và `exam` (như trước 0.3.0); lượt `lesson`, `quick`, `review` chỉ trả khi lọc đúng
+        loại đó. Lọc `kind` + `refId` và xem `status` để tìm lượt đang mở (ví dụ đề thi đang làm dở khi tải lại trang).
       parameters:
         - name: kind
           in: query
@@ -337,6 +425,7 @@ paths:
       description: |
         Tính từ sổ cái XP và các lượt làm, không lưu sẵn. Ngày tính theo giờ Việt Nam, tuần bắt đầu từ thứ Hai.
         Chuỗi ngày còn nếu ngày học gần nhất là hôm nay hoặc hôm qua.
+        Từ 0.3.0 (L7) có thêm hạng tuần trên bảng xếp hạng (`weeklyRank`, `weeklyRankTotal`, `weeklyRankChange`), như `GET /v1/leaderboard?period=week`.
       responses:
         "200":
           description: Số liệu
@@ -346,6 +435,1116 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
 
+  # ------------------------------------------------------------------ 0.3.0: nội dung (đọc)
+
+  /v1/courses:
+    get:
+      tags: [courses]
+      operationId: listCourses
+      x-slice: L1
+      summary: Các khóa học kèm chương và danh sách bài (không có nội dung bài)
+      description: |
+        Mọi vai trò. Khóa sắp ra mắt vẫn có (để xem lộ trình) với `comingSoon` = true. Không theo người dùng: trạng thái bài của học sinh
+        ở `GET /v1/me/lesson-progress`. Thứ tự theo khối rồi vị trí admin đặt.
+      parameters:
+        - { $ref: "#/components/parameters/IfNoneMatch" }
+      responses:
+        "200":
+          description: Danh sách
+          headers:
+            ETag: { $ref: "#/components/headers/ETag" }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [version, items]
+                properties:
+                  version: { $ref: "#/components/schemas/ContentVersion" }
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/CourseOutline" }
+        "304": { $ref: "#/components/responses/NotModified" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/courses/{courseId}:
+    get:
+      tags: [courses]
+      operationId: getCourse
+      x-slice: L1
+      summary: Một khóa học kèm chương và danh sách bài
+      parameters:
+        - { $ref: "#/components/parameters/CourseId" }
+        - { $ref: "#/components/parameters/IfNoneMatch" }
+      responses:
+        "200":
+          description: Khóa học
+          headers:
+            ETag: { $ref: "#/components/headers/ETag" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CourseOutline" }
+        "304": { $ref: "#/components/responses/NotModified" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/courses/{courseId}/lessons/{lessonId}:
+    get:
+      tags: [courses]
+      operationId: getLesson
+      x-slice: L1
+      summary: Một bài học kèm nội dung và Luyện tập nhanh (không có đáp án)
+      description: |
+        Bài của khóa sắp ra mắt: học sinh nhận 409 `course_coming_soon`; giáo viên và admin xem được (xem trước).
+        Bài không thuộc khóa đó là 404. Luyện tập nhanh chỉ gồm câu đang dùng, theo thứ tự admin đặt.
+      parameters:
+        - { $ref: "#/components/parameters/CourseId" }
+        - { $ref: "#/components/parameters/LessonId" }
+      responses:
+        "200":
+          description: Bài học
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LessonDetail" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Khóa sắp ra mắt (`course_coming_soon`), với học sinh
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /v1/questions/{questionId}:
+    get:
+      tags: [courses]
+      operationId: getPublicQuestion
+      x-slice: L1
+      summary: Một câu của ngân hàng, không có đáp án (ví dụ để hỏi trên Cộng đồng)
+      description: Mọi vai trò. Câu đã nghỉ vẫn đọc được (`retired`). Câu giáo viên tự soạn (`tq-…`) không ở đây (404).
+      parameters:
+        - { $ref: "#/components/parameters/QuestionId" }
+      responses:
+        "200":
+          description: Câu hỏi
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: "#/components/schemas/PublicQuestion" }
+                  - type: object
+                    required: [courseId, retired]
+                    properties:
+                      courseId: { type: string }
+                      retired: { type: boolean }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/practice-catalog:
+    get:
+      tags: [courses]
+      operationId: getPracticeCatalog
+      x-slice: L1
+      summary: Chương và đặc điểm của từng câu đang dùng (để lọc bài tập), câu của đề đang mở
+      description: |
+        Mọi vai trò. Không có đề bài hay đáp án, trừ `openExamQuestions` (đề bài của câu nằm trong đề đang mở, để Cộng đồng chặn đăng lại đề).
+      parameters:
+        - { $ref: "#/components/parameters/IfNoneMatch" }
+      responses:
+        "200":
+          description: Danh mục
+          headers:
+            ETag: { $ref: "#/components/headers/ETag" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PracticeCatalog" }
+        "304": { $ref: "#/components/responses/NotModified" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/bank/questions:
+    get:
+      tags: [bank]
+      operationId: listBankQuestions
+      x-slice: L1
+      summary: Ngân hàng câu hỏi kèm đáp án (giáo viên, admin)
+      description: |
+        Giáo viên dùng để chọn câu cho bài của lớp và xem trước bộ, đề của PkKemis; học sinh 403. Mặc định không có câu đã nghỉ.
+        `q` tìm trong đề bài, chủ đề và mã câu, không phân biệt hoa thường và dấu.
+      parameters:
+        - { name: courseId, in: query, schema: { type: string } }
+        - { name: chapterId, in: query, schema: { type: string } }
+        - { name: lessonId, in: query, schema: { type: string } }
+        - { name: type, in: query, schema: { $ref: "#/components/schemas/QuestionType" } }
+        - { name: level, in: query, schema: { $ref: "#/components/schemas/QuestionLevel" } }
+        - { name: q, in: query, schema: { type: string, maxLength: 100 } }
+        - name: retired
+          in: query
+          schema: { type: string, enum: [exclude, include, only], default: exclude }
+      responses:
+        "200":
+          description: Câu hỏi, theo khóa, chương rồi thứ tự trong ngân hàng
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [version, items]
+                properties:
+                  version: { $ref: "#/components/schemas/ContentVersion" }
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/BankQuestion" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/StaffOnly" }
+
+  /v1/bank/questions/batch:
+    post:
+      tags: [bank]
+      operationId: getBankQuestionsBatch
+      x-slice: L1
+      summary: Nhiều câu của ngân hàng theo mã, kèm đáp án (giáo viên, admin)
+      description: Kể cả câu đã nghỉ. Mã không có thì bị bỏ qua, không báo lỗi. Học sinh 403.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/IdsRequest" }
+      responses:
+        "200":
+          description: Các câu tìm thấy
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/BankQuestion" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/StaffOnly" }
+
+  /v1/me/questions/revealed:
+    post:
+      tags: [attempts]
+      operationId: getRevealedQuestions
+      x-slice: L4
+      summary: Câu kèm đáp án, chỉ những câu mình đã từng trả lời (học sinh)
+      description: |
+        Đáp án chỉ lộ sau khi trả lời: chỉ trả câu học sinh đã có kết quả (`GET /v1/me/results`), mã khác bị bỏ qua không báo lỗi.
+        Dùng để hiện sổ tay lỗi sai còn nằm ở trình duyệt (L4) và xem lại bài đã làm.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/IdsRequest" }
+      responses:
+        "200":
+          description: Các câu được xem
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Question" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  # ------------------------------------------------------------------ 0.3.0: soạn nội dung (admin)
+
+  /v1/admin/content:
+    get:
+      tags: [admin]
+      operationId: getAdminContent
+      x-slice: L1
+      summary: Toàn bộ nội dung như admin thấy (kèm đáp án, nhãn bản gốc / đã sửa / mới, mục đã nghỉ, đã gỡ)
+      description: |
+        Chỉ admin. Trang quản trị dựng mọi bảng (độ phủ theo chương, nơi đang dùng câu, bộ và đề) từ đây.
+        `revision` của từng mục gửi lại khi sửa để phát hiện người khác vừa lưu.
+      parameters:
+        - { $ref: "#/components/parameters/IfNoneMatch" }
+      responses:
+        "200":
+          description: Nội dung
+          headers:
+            ETag: { $ref: "#/components/headers/ETag" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminContent" }
+        "304": { $ref: "#/components/responses/NotModified" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/AdminOnly" }
+
+  /v1/admin/courses/{courseId}:
+    put:
+      tags: [admin]
+      operationId: adminSaveCourse
+      x-slice: L2
+      summary: Lưu cả một khóa học (thông tin, chương, bài, nội dung bài, Luyện tập nhanh)
+      description: |
+        Thay toàn bộ khóa bằng bản gửi lên (web tính bản mới bằng `withOutline`, `withLesson` từ bản đọc được rồi gửi cả khóa).
+        Máy chủ kiểm bằng cùng luật với web (`courseDraftProblem`), thêm: mã chương, bài không trùng khóa khác; câu trong Luyện tập nhanh
+        có trong ngân hàng; chương bị bỏ phải không còn câu hỏi (kể cả câu đã nghỉ) hay bộ bài tập. Lỗi là 400 `validation_failed` với
+        `detail` đúng câu của luật. `revision` khác bản trên máy chủ: 409 `content_conflict`. Bài bị xóa thì tiến độ của học sinh ở bài đó
+        không còn được tính; câu gắn với bài đó mất liên kết bài khi đọc.
+        Không tạo được khóa mới ở đây. Lưu đúng như bản gốc thì khóa lại mang nhãn bản gốc.
+      parameters:
+        - { $ref: "#/components/parameters/CourseId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [draft, revision]
+              properties:
+                draft: { $ref: "#/components/schemas/CourseDraft" }
+                revision: { type: integer, description: "`revision` của khóa lúc đọc." }
+      responses:
+        "200":
+          description: Khóa sau khi lưu
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminCourse" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/AdminOnly" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/ContentConflict" }
+
+  /v1/admin/courses/{courseId}/restore-sample:
+    post:
+      tags: [admin]
+      operationId: adminRestoreCourse
+      x-slice: L2
+      summary: Đưa khóa về bản gốc (thông tin, chương, bài)
+      description: |
+        Chương do admin thêm còn câu hỏi hoặc bộ bài tập thì chưa khôi phục được: 409 `restore_blocked`, `detail` nói chương nào, còn gì
+        (giống `restoreProblem` của web; `AdminCourse.restoreBlocked` báo trước điều này). Khóa đang là bản gốc thì không đổi gì.
+      parameters:
+        - { $ref: "#/components/parameters/CourseId" }
+      responses:
+        "200":
+          description: Khóa sau khi khôi phục
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminCourse" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/AdminOnly" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Chưa khôi phục được (`restore_blocked`)
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /v1/admin/questions:
+    post:
+      tags: [admin]
+      operationId: adminCreateQuestion
+      x-slice: L2
+      summary: Thêm một câu vào ngân hàng
+      description: |
+        Máy chủ đặt mã: `<chương>-<chủ đề không dấu>` (tối đa 32 kí tự của chủ đề), thêm `-2`, `-3`… khi trùng; `question.id` gửi lên
+        bị bỏ qua. Kiểm bằng `bankQuestionProblem`. `practice` = true thì câu được thêm vào cuối Luyện tập nhanh của bài của nó (cần `lessonId`).
+        Gửi lại cùng `Idempotency-Key` trong 24 giờ thì nhận lại câu đã tạo, không tạo thêm.
+      parameters:
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [question, practice]
+              properties:
+                question: { $ref: "#/components/schemas/Question" }
+                practice: { type: boolean, description: Có trong Luyện tập nhanh của bài của câu. }
+      responses:
+        "201":
+          description: Câu vừa thêm
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminQuestion" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/AdminOnly" }
+
+  /v1/admin/questions/{questionId}:
+    put:
+      tags: [admin]
+      operationId: adminSaveQuestion
+      x-slice: L2
+      summary: Sửa một câu của ngân hàng
+      description: |
+        Thay cả câu (mã giữ nguyên). Đổi sang bài khác thì câu rời Luyện tập nhanh của bài cũ; `practice` đặt câu vào hay bỏ khỏi Luyện tập
+        nhanh của bài mới. Lưu đúng như bản gốc thì câu lại mang nhãn bản gốc. Đổi đáp án có hiệu lực ngay, kể cả với lượt đang làm.
+      parameters:
+        - { $ref: "#/components/parameters/QuestionId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [question, practice, revision]
+              properties:
+                question: { $ref: "#/components/schemas/Question" }
+                practice: { type: boolean }
+                revision: { type: integer }
+      responses:
+        "200":
+          description: Câu sau khi sửa
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminQuestion" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/AdminOnly" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/ContentConflict" }
+
+  /v1/admin/questions/{questionId}/retire:
+    post:
+      tags: [admin]
+      operationId: adminRetireQuestion
+      x-slice: L2
+      summary: Cho câu nghỉ (xóa khỏi nơi dùng, vẫn tìm được theo mã)
+      description: |
+        Câu nghỉ không còn trong Luyện tập nhanh, bộ, đề, luyện nhanh và lựa chọn của giáo viên; lượt làm cũ, sổ tay lỗi sai và bài giáo viên
+        đã soạn vẫn đọc được nó. Làm lại khi đã nghỉ thì không đổi gì.
+      parameters:
+        - { $ref: "#/components/parameters/QuestionId" }
+      responses:
+        "200":
+          description: Câu sau khi đổi
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminQuestion" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/AdminOnly" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/admin/questions/{questionId}/unretire:
+    post:
+      tags: [admin]
+      operationId: adminUnretireQuestion
+      x-slice: L2
+      summary: Dùng lại câu đã nghỉ
+      parameters:
+        - { $ref: "#/components/parameters/QuestionId" }
+      responses:
+        "200":
+          description: Câu sau khi đổi
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminQuestion" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/AdminOnly" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/admin/questions/{questionId}/restore-sample:
+    post:
+      tags: [admin]
+      operationId: adminRestoreQuestion
+      x-slice: L2
+      summary: Đưa câu về bản gốc
+      description: |
+        Câu do admin thêm không có bản gốc (409 `no_sample`). Chương của bản gốc không còn trong khóa: 409 `restore_blocked`
+        ("Khôi phục khóa học trước").
+      parameters:
+        - { $ref: "#/components/parameters/QuestionId" }
+      responses:
+        "200":
+          description: Câu sau khi khôi phục
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminQuestion" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/AdminOnly" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Không có bản gốc (`no_sample`) hoặc chưa khôi phục được (`restore_blocked`)
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /v1/admin/exercise-sets:
+    post:
+      tags: [admin]
+      operationId: adminCreateExerciseSet
+      x-slice: L2
+      summary: Thêm một bộ bài tập của PkKemis
+      description: |
+        Máy chủ đặt mã từ tên (không dấu, `-2`… khi trùng với bộ hoặc đề khác) và `chapterLabel` ("Chương n"). Kiểm bằng `practiceProblem`
+        (tối đa 40 câu, câu thuộc khóa, XP mỗi câu 1–100, thưởng 0–200, người soạn bắt buộc). Có `Idempotency-Key` như thêm câu.
+      parameters:
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [item]
+              properties:
+                item: { $ref: "#/components/schemas/ExerciseSetInput" }
+      responses:
+        "201":
+          description: Bộ vừa thêm
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminExerciseSet" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/AdminOnly" }
+
+  /v1/admin/exercise-sets/{setId}:
+    put:
+      tags: [admin]
+      operationId: adminSaveExerciseSet
+      x-slice: L2
+      summary: Sửa một bộ bài tập của PkKemis
+      description: Lượt đang làm giữ đề đã ghim; lượt mới dùng bản vừa lưu. Lưu đúng như bản gốc thì bộ lại mang nhãn bản gốc.
+      parameters:
+        - { $ref: "#/components/parameters/SetId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [item, revision]
+              properties:
+                item: { $ref: "#/components/schemas/ExerciseSetInput" }
+                revision: { type: integer }
+      responses:
+        "200":
+          description: Bộ sau khi sửa
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminExerciseSet" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/AdminOnly" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/ContentConflict" }
+
+  /v1/admin/exercise-sets/{setId}/remove:
+    post:
+      tags: [admin]
+      operationId: adminRemoveExerciseSet
+      x-slice: L2
+      summary: Gỡ bộ bài tập (học sinh không thấy nữa; khôi phục được)
+      description: Lượt đang mở vẫn nộp được; lượt đã làm vẫn có trong lịch sử. Làm lại khi đã gỡ thì không đổi gì.
+      parameters:
+        - { $ref: "#/components/parameters/SetId" }
+      responses:
+        "200":
+          description: Bộ sau khi đổi
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminExerciseSet" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/AdminOnly" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/admin/exercise-sets/{setId}/unremove:
+    post:
+      tags: [admin]
+      operationId: adminUnremoveExerciseSet
+      x-slice: L2
+      summary: Đưa bộ bài tập đã gỡ trở lại
+      parameters:
+        - { $ref: "#/components/parameters/SetId" }
+      responses:
+        "200":
+          description: Bộ sau khi đổi
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminExerciseSet" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/AdminOnly" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/admin/exercise-sets/{setId}/restore-sample:
+    post:
+      tags: [admin]
+      operationId: adminRestoreExerciseSet
+      x-slice: L2
+      summary: Đưa bộ bài tập về bản gốc
+      description: "Bộ do admin thêm: 409 `no_sample`."
+      parameters:
+        - { $ref: "#/components/parameters/SetId" }
+      responses:
+        "200":
+          description: Bộ sau khi khôi phục
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminExerciseSet" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/AdminOnly" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Không có bản gốc (`no_sample`)
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /v1/admin/exams:
+    post:
+      tags: [admin]
+      operationId: adminCreateExam
+      x-slice: L2
+      summary: Thêm một đề thi của PkKemis
+      description: |
+        Máy chủ đặt mã từ tên như bộ bài tập. Kiểm bằng `practiceProblem` (tối đa 60 câu; đề "sắp diễn ra" lưu được khi chưa có câu nhưng
+        cần ngày mở; 5–180 phút; điểm đạt 0–100). Có `Idempotency-Key`.
+      parameters:
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [item]
+              properties:
+                item: { $ref: "#/components/schemas/ExamInput" }
+      responses:
+        "201":
+          description: Đề vừa thêm
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminExam" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/AdminOnly" }
+
+  /v1/admin/exams/{examId}:
+    put:
+      tags: [admin]
+      operationId: adminSaveExam
+      x-slice: L2
+      summary: Sửa một đề thi của PkKemis
+      description: Lượt đang làm giữ đề và hạn chót đã có; lượt mới dùng bản vừa lưu.
+      parameters:
+        - { $ref: "#/components/parameters/ExamId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [item, revision]
+              properties:
+                item: { $ref: "#/components/schemas/ExamInput" }
+                revision: { type: integer }
+      responses:
+        "200":
+          description: Đề sau khi sửa
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminExam" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/AdminOnly" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/ContentConflict" }
+
+  /v1/admin/exams/{examId}/remove:
+    post:
+      tags: [admin]
+      operationId: adminRemoveExam
+      x-slice: L2
+      summary: Gỡ đề thi (học sinh không thấy nữa; khôi phục được)
+      description: Lượt đang mở vẫn nộp được (đồng hồ vẫn chạy). Làm lại khi đã gỡ thì không đổi gì.
+      parameters:
+        - { $ref: "#/components/parameters/ExamId" }
+      responses:
+        "200":
+          description: Đề sau khi đổi
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminExam" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/AdminOnly" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/admin/exams/{examId}/unremove:
+    post:
+      tags: [admin]
+      operationId: adminUnremoveExam
+      x-slice: L2
+      summary: Đưa đề đã gỡ trở lại
+      parameters:
+        - { $ref: "#/components/parameters/ExamId" }
+      responses:
+        "200":
+          description: Đề sau khi đổi
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminExam" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/AdminOnly" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/admin/exams/{examId}/restore-sample:
+    post:
+      tags: [admin]
+      operationId: adminRestoreExam
+      x-slice: L2
+      summary: Đưa đề về bản gốc
+      description: "Đề do admin thêm: 409 `no_sample`."
+      parameters:
+        - { $ref: "#/components/parameters/ExamId" }
+      responses:
+        "200":
+          description: Đề sau khi khôi phục
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminExam" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/AdminOnly" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Không có bản gốc (`no_sample`)
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /v1/admin/content/reset:
+    post:
+      tags: [admin]
+      operationId: adminResetContent
+      x-slice: L2
+      summary: Đưa mọi nội dung về bản gốc
+      description: |
+        Như bấm "Khôi phục bản gốc" cho mọi khóa, câu, bộ, đề. Câu do admin thêm bị cho nghỉ, bộ và đề do admin thêm bị gỡ (không xóa hẳn),
+        để lượt làm cũ, sổ tay lỗi sai và bài giáo viên đã soạn vẫn đọc được. Câu đã nghỉ, bộ và đề đã gỡ của bản gốc được dùng lại.
+        Sau đó `pristine` vẫn là false (đã có thay đổi).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [confirm]
+              properties:
+                confirm: { const: true, description: "Phải gửi true, để không bấm nhầm." }
+      responses:
+        "200":
+          description: Đã đưa về bản gốc
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [version]
+                properties:
+                  version: { $ref: "#/components/schemas/ContentVersion" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/AdminOnly" }
+
+  /v1/admin/content/import:
+    post:
+      tags: [admin]
+      operationId: adminImportContent
+      x-slice: L2
+      summary: Chuyển nội dung admin đã sửa trên bản thử (`.data/admin-content.json`) lên máy chủ
+      description: |
+        Áp các thay đổi lên bản gốc theo đúng quy tắc `mergeContent` của web, rồi kiểm toàn bộ bằng các luật soạn nội dung.
+        **Tất cả hoặc không gì cả:** có lỗi thì 400 `validation_failed`, `errors[]` liệt kê từng mục (`field` dạng `questions.<mã>`,
+        `courses.<mã>`, `sets.<mã>`, `exams.<mã>`), không ghi gì.
+        Chỉ nhận khi nội dung còn nguyên bản gốc (`pristine`), không thì 409 `content_not_pristine`. Gửi lại đúng file đã chuyển (cùng
+        nội dung) thì trả 200 với `alreadyImported` = true và không làm gì. Trường của học sinh mẫu (`bestScore`, `lastPracticedAt`,
+        `attempts`) bị bỏ qua.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [edits]
+              properties:
+                edits: { $ref: "#/components/schemas/ContentEdits" }
+                fileName: { type: string, maxLength: 200, description: Để ghi nhật ký. }
+      responses:
+        "200":
+          description: Đã chuyển (hoặc đã chuyển từ trước)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ImportResult" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/AdminOnly" }
+        "409":
+          description: Nội dung máy chủ đã được sửa (`content_not_pristine`)
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /v1/admin/content/changes:
+    get:
+      tags: [admin]
+      operationId: listContentChanges
+      x-slice: L2
+      summary: Nhật ký sửa nội dung, mới nhất trước (admin)
+      parameters:
+        - name: page
+          in: query
+          schema: { type: integer, minimum: 0, default: 0 }
+        - name: size
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      responses:
+        "200":
+          description: Một trang nhật ký
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, page, size, total]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/ContentChange" }
+                  page: { type: integer }
+                  size: { type: integer }
+                  total: { type: integer, format: int64 }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/AdminOnly" }
+
+  # ------------------------------------------------------------------ 0.3.0: tiến độ bài học
+
+  /v1/me/lesson-progress:
+    get:
+      tags: [lessons]
+      operationId: getMyLessonProgress
+      x-slice: L3
+      summary: Bài đã mở, đã xong của mình (học sinh)
+      description: |
+        Bài chưa mở không có dòng nào (chưa học). Chỉ bài còn trong nội dung. Không ghi gì.
+      parameters:
+        - { name: courseId, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: Tiến độ
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, lastActiveAt]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/LessonProgress" }
+                  lastActiveAt: { type: [string, "null"], format: date-time, description: Lần hoạt động gần nhất trên learning. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v1/lessons/{lessonId}/open:
+    post:
+      tags: [lessons]
+      operationId: openLesson
+      x-slice: L3
+      summary: Ghi là đang học bài này (gọi khi trang bài học hiện ra, học sinh)
+      description: Lặp được. Bài đã xong thì giữ "đã xong". Cập nhật hoạt động gần nhất.
+      parameters:
+        - { $ref: "#/components/parameters/LessonId" }
+      responses:
+        "200":
+          description: Tiến độ của bài
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LessonProgress" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Khóa sắp ra mắt (`course_coming_soon`)
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /v1/lessons/{lessonId}/complete:
+    post:
+      tags: [lessons]
+      operationId: completeLesson
+      x-slice: L3
+      summary: Đánh dấu hoàn thành bài (học sinh)
+      description: |
+        Lần đầu với mỗi bài: +50 XP (chống lặp ở máy chủ, hai yêu cầu cùng lúc cũng chỉ cộng một lần). Lần sau trả lại tiến độ, `xp` = 0,
+        `firstTime` = false.
+      parameters:
+        - { $ref: "#/components/parameters/LessonId" }
+      responses:
+        "200":
+          description: Đã xong
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [progress, xp, firstTime]
+                properties:
+                  progress: { $ref: "#/components/schemas/LessonProgress" }
+                  xp: { type: integer, minimum: 0 }
+                  firstTime: { type: boolean }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Khóa sắp ra mắt (`course_coming_soon`)
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  # ------------------------------------------------------------------ 0.3.0: sổ tay lỗi sai
+
+  /v1/me/mistakes:
+    get:
+      tags: [mistakes]
+      operationId: listMyMistakes
+      x-slice: L5
+      summary: Sổ tay lỗi sai của mình (học sinh)
+      description: |
+        Mọi mục, kể cả đã nhớ, kèm câu đầy đủ (đáp án và lời giải: học sinh đã trả lời câu này). `today` là ngày hôm nay theo giờ Việt Nam,
+        để trình duyệt tính "đến hạn" giống máy chủ. Câu tự soạn của giáo viên (`tq-…`) là bản chụp lúc làm bài của lớp.
+      responses:
+        "200":
+          description: Sổ tay
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [today, entries]
+                properties:
+                  today: { type: string, format: date }
+                  entries:
+                    type: array
+                    items: { $ref: "#/components/schemas/MistakeEntry" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v1/me/mistakes/{questionId}:
+    delete:
+      tags: [mistakes]
+      operationId: removeMyMistake
+      x-slice: L5
+      summary: Bỏ một câu khỏi sổ tay (học sinh)
+      description: Làm sai câu đó lần nữa thì câu vào sổ lại như mới.
+      parameters:
+        - { $ref: "#/components/parameters/QuestionId" }
+      responses:
+        "204": { description: Đã bỏ }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # ------------------------------------------------------------------ 0.3.0: bảng xếp hạng
+
+  /v1/leaderboard:
+    get:
+      tags: [leaderboard]
+      operationId: getLeaderboard
+      x-slice: L7
+      summary: Bảng xếp hạng XP của mọi học sinh trong một kỳ
+      description: |
+        Mọi vai trò xem được; chỉ học sinh có dòng của mình (`me`). Chỉ học sinh không bị khóa và không bật "ẩn khỏi bảng xếp hạng" (identity)
+        có trên bảng; người có 0 XP trong kỳ không có hạng. Hạng = 1 + số người có nhiều XP hơn (bằng XP thì cùng hạng).
+        Kỳ: `week` từ 00:00 thứ Hai, `month` từ 00:00 ngày 1 (giờ Việt Nam), `all` mọi thời gian.
+        `rankChange` > 0 là lên hạng: so với hạng cuối kỳ trước (`week`, `month`) hoặc hạng mọi thời gian lúc đầu tuần này (`all`);
+        null khi kỳ trước chưa có hạng. Mỗi dòng chỉ có tên, ảnh, cấp độ, XP (quyền riêng tư của học sinh). Tính lại tối đa mỗi 60 giây;
+        tên và ảnh làm mới từ identity tối đa mỗi 10 phút.
+      parameters:
+        - name: period
+          in: query
+          required: true
+          schema: { type: string, enum: [week, month, all] }
+        - name: limit
+          in: query
+          description: Số dòng đầu bảng (1–50, mặc định 10).
+          schema: { type: integer, minimum: 1, maximum: 50, default: 10 }
+      responses:
+        "200":
+          description: Bảng xếp hạng
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LeaderboardBoard" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  # ------------------------------------------------------------------ 0.3.0: nội bộ
+
+  /internal/content/snapshot:
+    get:
+      tags: [internal]
+      operationId: getContentSnapshot
+      x-slice: L1
+      x-transitional: "Chỉ web dùng trong L1–L3; web thôi gọi ở L4, rồi gỡ."
+      summary: Toàn bộ nội dung đang dùng, kèm đáp án (web, tạm thời)
+      description: |
+        Để `getContent()` của web dựng lại đúng kiểu `Content` cũ trong khi trình chạy bài còn chấm ở trình duyệt. Gồm mọi câu (kể cả đã nghỉ,
+        mã trong `retired`), bộ và đề chưa bị gỡ. Hỗ trợ `If-None-Match`.
+      security:
+        - internalKey: []
+      parameters:
+        - { $ref: "#/components/parameters/IfNoneMatch" }
+      responses:
+        "200":
+          description: Nội dung
+          headers:
+            ETag: { $ref: "#/components/headers/ETag" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ContentSnapshot" }
+        "304": { $ref: "#/components/responses/NotModified" }
+        "403": { $ref: "#/components/responses/InternalForbidden" }
+
+  /internal/catalog:
+    get:
+      tags: [internal]
+      operationId: getInternalCatalog
+      x-slice: L1
+      summary: Danh mục khóa và chương (classroom)
+      description: classroom lưu lại bản này và làm mới khi cũ hơn 60 giây bằng `If-None-Match`.
+      security:
+        - internalKey: []
+      parameters:
+        - { $ref: "#/components/parameters/IfNoneMatch" }
+      responses:
+        "200":
+          description: Danh mục
+          headers:
+            ETag: { $ref: "#/components/headers/ETag" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Catalog" }
+        "304": { $ref: "#/components/responses/NotModified" }
+        "403": { $ref: "#/components/responses/InternalForbidden" }
+
+  /internal/questions/batch:
+    post:
+      tags: [internal]
+      operationId: getInternalQuestionsBatch
+      x-slice: L1
+      summary: Nhiều câu của ngân hàng kèm đáp án (classroom kiểm và chụp câu khi lưu bài)
+      description: Kể cả câu đã nghỉ (`retired`); mã không có thì bị bỏ qua.
+      security:
+        - internalKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/IdsRequest" }
+      responses:
+        "200":
+          description: Các câu tìm thấy
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [version, items]
+                properties:
+                  version: { $ref: "#/components/schemas/ContentVersion" }
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/BankQuestion" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "403": { $ref: "#/components/responses/InternalForbidden" }
+
+  /internal/learners/course-progress:
+    post:
+      tags: [internal]
+      operationId: getLearnersCourseProgress
+      x-slice: L3
+      summary: Tiến độ một khóa và lần hoạt động gần nhất của nhiều học sinh (classroom, cho giáo viên)
+      description: |
+        classroom chỉ gọi cho học sinh của lớp mà người xem có quyền xem. Mỗi mã gửi lên có đúng một dòng (học sinh chưa học gì: 0 bài,
+        `lastActiveAt` null). Chỉ có số bài, phần trăm và thời điểm, không có chi tiết bài hay câu.
+      security:
+        - internalKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [courseId, userIds]
+              properties:
+                courseId: { type: string }
+                userIds:
+                  type: array
+                  minItems: 1
+                  maxItems: 200
+                  uniqueItems: true
+                  items: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Tiến độ
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [courseId, totalLessons, items]
+                properties:
+                  courseId: { type: string }
+                  totalLessons: { type: integer, minimum: 0 }
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [userId, completedLessons, percent, lastActiveAt]
+                      properties:
+                        userId: { type: string, format: uuid }
+                        completedLessons: { type: integer, minimum: 0 }
+                        percent: { type: integer, minimum: 0, maximum: 100, description: Làm tròn xuống. }
+                        lastActiveAt: { type: [string, "null"], format: date-time }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "403": { $ref: "#/components/responses/InternalForbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /internal/class-work-results:
+    post:
+      tags: [internal]
+      operationId: recordClassWorkResult
+      x-slice: L6
+      summary: Kết quả một lần làm bài của lớp do classroom chấm (XP lần đầu, kết quả từng câu, sổ tay lỗi sai)
+      description: |
+        classroom gửi sau khi tự chấm và ghi bài nộp (outbox, gửi lại khi lỗi). **Lặp được theo `attemptId`:** gửi lại trả đúng kết quả lần
+        đầu, không cộng thêm.
+        - **XP** (chỉ lần nộp đầu tiên của học sinh ở mỗi `workId`): Σ làm tròn(`share` × 10) + 20 nếu là bộ bài tập và mọi câu đã trả lời đủ
+          (`complete`), hoặc + 40 nếu là đề và `score10` × 10 ≥ max(`passPercent`, 50). Tổng XP từ bài của lớp mỗi ngày (giờ Việt Nam) tối đa
+          300; vượt thì cắt, `capped` = true.
+        - **Kết quả câu** ngân hàng ghi vào kết quả mới nhất của học sinh (`/v1/me/results`). Câu ngân hàng mã lạ thì bỏ qua.
+        - **Sổ tay lỗi sai:** câu có trả lời (ít nhất một phần) mà chưa đúng hoàn toàn; câu tự soạn phải gửi kèm `question` (bản chụp đầy đủ).
+        - Cập nhật hoạt động gần nhất của học sinh.
+      security:
+        - internalKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ClassWorkResult" }
+      responses:
+        "200":
+          description: Đã ghi (hoặc đã ghi từ trước)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [attemptId, xp, firstAttempt, capped, mistakesRecorded]
+                properties:
+                  attemptId: { type: string, format: uuid }
+                  xp: { type: integer, minimum: 0 }
+                  firstAttempt: { type: boolean }
+                  capped: { type: boolean, description: XP bị cắt vì đã chạm trần ngày. }
+                  mistakesRecorded: { type: integer, minimum: 0 }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "403": { $ref: "#/components/responses/InternalForbidden" }
+
 components:
   securitySchemes:
     bearerAuth:
@@ -353,8 +1552,45 @@ components:
       scheme: bearer
       bearerFormat: JWT
       description: Access token của identity (RS256).
+    internalKey:
+      type: apiKey
+      in: header
+      name: X-Internal-Key
+      description: Khóa dùng chung của learning (`LEARNING_INTERNAL_KEY`), chỉ service gọi nhau. Thay bằng token giữa service khi có gateway.
+
+  headers:
+    ETag:
+      description: 'Phiên bản nội dung trong dấu nháy kép, ví dụ "42".'
+      schema: { type: string }
 
   parameters:
+    IfNoneMatch:
+      name: If-None-Match
+      in: header
+      required: false
+      description: ETag đã có; đúng phiên bản hiện tại thì nhận 304 không có thân.
+      schema: { type: string }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: Khóa chống lặp (tối đa 100 kí tự); cùng khóa trong 24 giờ thì nhận lại kết quả lần đầu.
+      schema: { type: string, maxLength: 100 }
+    CourseId:
+      name: courseId
+      in: path
+      required: true
+      schema: { type: string }
+    LessonId:
+      name: lessonId
+      in: path
+      required: true
+      schema: { type: string }
+    QuestionId:
+      name: questionId
+      in: path
+      required: true
+      schema: { type: string }
     SetId:
       name: setId
       in: path
@@ -392,6 +1628,28 @@ components:
       content:
         application/problem+json:
           schema: { $ref: "#/components/schemas/Problem" }
+    NotModified:
+      description: Nội dung không đổi so với `If-None-Match` (không có thân)
+    StaffOnly:
+      description: Chỉ giáo viên và admin (`forbidden`)
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    AdminOnly:
+      description: Chỉ admin (`forbidden`)
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    InternalForbidden:
+      description: Thiếu hoặc sai `X-Internal-Key` (`forbidden`)
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    ContentConflict:
+      description: Mục vừa được người khác lưu (`content_conflict`); đọc lại rồi sửa
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
 
   schemas:
     Problem:
@@ -415,6 +1673,12 @@ components:
             - already_answered
             - not_available_during_exam
             - internal_error
+            - course_coming_soon
+            - no_questions
+            - content_conflict
+            - restore_blocked
+            - no_sample
+            - content_not_pristine
         detail: { type: string, description: "Thông báo tiếng Việt, hiển thị được cho người dùng." }
         errors:
           type: array
@@ -427,7 +1691,10 @@ components:
 
     AttemptKind:
       type: string
-      enum: [exercise, exam]
+      enum: [exercise, exam, lesson, quick, review]
+      description: |
+        `exercise` bộ bài tập, `exam` đề thi. Từ 0.3.0: `lesson` Luyện tập nhanh của bài (L4), `quick` luyện nhanh (L4), `review` ôn sổ tay
+        lỗi sai (L5). Ba loại mới chỉ xuất hiện ở lượt mà chính người gọi bắt đầu hoặc lọc theo.
 
     QuestionType:
       type: string
@@ -444,7 +1711,26 @@ components:
       required: [kind, refId]
       properties:
         kind: { $ref: "#/components/schemas/AttemptKind" }
-        refId: { type: string, description: Mã bộ bài tập hoặc đề thi. }
+        refId:
+          type: string
+          description: Mã bộ bài tập hoặc đề thi. Từ 0.3.0, `lesson` là mã bài; `quick` gửi `quick`; `review` gửi `review`.
+        quick:
+          type: object
+          description: Bắt buộc khi `kind` là `quick` (0.3.0, L4). Không gửi khóa và chương thì rút từ mọi khóa đang mở.
+          properties:
+            courseId: { type: string }
+            chapterId: { type: string, description: Có thì phải thuộc `courseId` (nếu gửi). }
+            type: { $ref: "#/components/schemas/QuestionType" }
+            count: { type: integer, minimum: 1, maximum: 20, default: 10 }
+        review:
+          type: object
+          description: Bắt buộc khi `kind` là `review` (0.3.0, L5).
+          required: [mode]
+          properties:
+            mode:
+              type: string
+              enum: [due, all]
+              description: "`due`: các câu đến hạn, dời lịch ôn và có XP; `all`: mọi câu chưa nhớ, luyện tự do, không đổi lịch, không XP."
 
     ExerciseSetSummary:
       type: object
@@ -460,6 +1746,10 @@ components:
         completionBonus: { type: integer }
         author: { type: string }
         questionCount: { type: integer }
+        questionIds:
+          type: array
+          items: { type: string }
+          description: 0.3.0. Mã các câu đang dùng, theo thứ tự; tra dạng và mức của từng câu ở `GET /v1/practice-catalog`.
 
     ExerciseSetDetail:
       allOf:
@@ -496,6 +1786,10 @@ components:
         completionBonus: { type: integer }
         author: { type: string }
         questionCount: { type: integer }
+        questionIds:
+          type: array
+          items: { type: string }
+          description: 0.3.0. Mã các câu đang dùng, theo thứ tự (để đếm câu từng phần, chương đề bao phủ).
 
     ExamDetail:
       allOf:
@@ -648,6 +1942,41 @@ components:
               answer: { $ref: "#/components/schemas/Answer" }
               mark: { $ref: "#/components/schemas/Mark" }
               reveal: { $ref: "#/components/schemas/Reveal" }
+              xp: { type: integer, minimum: 0, description: "0.3.0: như `xp` của `/answers`." }
+              fresh: { type: boolean, description: "0.3.0: như `fresh` của `/answers`." }
+        questions:
+          type: array
+          description: |
+            0.3.0. Đề của lượt, ghim lúc bắt đầu, theo thứ tự làm, không có đáp án. Với `quick` và `review` đây là cách duy nhất biết câu nào
+            được rút. Đề thi theo thứ tự phần I, II, III do web tự xếp như hiện nay.
+          items: { $ref: "#/components/schemas/PublicQuestion" }
+        title: { type: string, description: '0.3.0. Tên bộ, đề, bài; "Luyện nhanh: …"; "Ôn tập sổ tay lỗi sai".' }
+        serverNow:
+          type: string
+          format: date-time
+          description: 0.3.0. Giờ máy chủ lúc trả lời, để trình duyệt đếm ngược tới `deadline` đúng dù đồng hồ máy học sinh lệch.
+        firstAttempt:
+          type: boolean
+          description: 0.3.0. Lượt này sẽ được XP của bộ hoặc đề (chưa nộp lượt nào trước). Với `lesson`, `quick`, `review` luôn true; XP theo từng câu.
+        flags:
+          type: array
+          items: { type: string }
+          description: 0.3.0. Đề thi, các câu đang đánh dấu xem lại.
+        options:
+          type: object
+          description: 0.3.0. Phạm vi của `quick` hoặc chế độ của `review` như lúc bắt đầu.
+          properties:
+            quick:
+              type: object
+              properties:
+                courseId: { type: string }
+                chapterId: { type: string }
+                type: { $ref: "#/components/schemas/QuestionType" }
+                count: { type: integer }
+            review:
+              type: object
+              properties:
+                mode: { type: string, enum: [due, all] }
 
     AttemptResult:
       type: object
@@ -669,6 +1998,8 @@ components:
         xp: { type: integer, description: XP lượt này mang lại; chỉ lượt nộp đầu tiên của mỗi bộ hoặc đề khác 0. }
         firstAttempt: { type: boolean }
         passed: { type: boolean, description: Chỉ đề thi. }
+        title: { type: string, description: 0.3.0. Như `OpenAttempt.title`. }
+        remembered: { type: integer, minimum: 0, description: '0.3.0 (L5). Chỉ `review` chế độ `due`: số câu vừa thành "đã nhớ".' }
         parts:
           type: object
           required: [I, II, III]
@@ -717,6 +2048,7 @@ components:
         seconds: { type: [integer, "null"] }
         xp: { type: integer }
         firstAttempt: { type: boolean }
+        title: { type: string, description: "0.3.0. Tên bộ hoặc đề, kể cả khi đã bị gỡ." }
 
     Stats:
       type: object
@@ -729,3 +2061,651 @@ components:
         streakDays: { type: integer }
         longestStreakDays: { type: integer }
         weeklyXp: { type: integer }
+        weeklyRank:
+          type: [integer, "null"]
+          description: 0.3.0 (L7). Hạng tuần này; null khi chưa có XP trong tuần hoặc đang ẩn khỏi bảng xếp hạng.
+        weeklyRankTotal: { type: integer, description: 0.3.0 (L7). Số học sinh có hạng tuần này. }
+        weeklyRankChange:
+          type: [integer, "null"]
+          description: 0.3.0 (L7). Số bậc lên (dương) hoặc xuống so với cuối tuần trước; null khi tuần trước chưa có hạng.
+
+    # ---------------------------------------------------------------- 0.3.0
+
+    ContentVersion:
+      type: integer
+      format: int64
+      minimum: 1
+      description: Phiên bản nội dung; tăng mỗi lần admin lưu.
+
+    IdsRequest:
+      type: object
+      required: [ids]
+      properties:
+        ids:
+          type: array
+          minItems: 1
+          maxItems: 200
+          uniqueItems: true
+          items: { type: string, maxLength: 120 }
+
+    Origin:
+      type: string
+      enum: [sample, edited, new]
+      description: Bản gốc, bản gốc đã được admin sửa, hay do admin thêm.
+
+    OxToken:
+      type: object
+      required: [text]
+      properties:
+        text: { type: string }
+        ox: { type: string, description: Số oxi hóa viết trên kí hiệu đứng ngay trước (dấu trừ là "−"). }
+
+    LessonBlock:
+      description: Một khối nội dung bài học (như `LessonBlock` của web).
+      oneOf:
+        - type: object
+          required: [type, text]
+          properties:
+            type: { const: heading }
+            text: { type: string }
+        - type: object
+          required: [type, text]
+          properties:
+            type: { const: paragraph }
+            text: { type: string }
+            lead: { type: boolean }
+        - type: object
+          required: [type, items]
+          properties:
+            type: { const: list }
+            ordered: { type: boolean }
+            items: { type: array, items: { type: string } }
+        - type: object
+          required: [type, headers, rows]
+          properties:
+            type: { const: table }
+            headers: { type: array, items: { type: string } }
+            rows: { type: array, items: { type: array, items: { type: string } } }
+        - type: object
+          required: [type, title, text]
+          properties:
+            type: { const: callout }
+            title: { type: string }
+            text: { type: string }
+        - type: object
+          required: [type, lines]
+          properties:
+            type: { const: equation }
+            lines:
+              type: array
+              items:
+                type: object
+                required: [tokens]
+                properties:
+                  label: { type: string }
+                  tokens: { type: array, items: { $ref: "#/components/schemas/OxToken" } }
+                  note: { type: string }
+
+    LessonOutline:
+      type: object
+      required: [id, title, summary, durationMinutes, written, practiceCount]
+      properties:
+        id: { type: string }
+        title: { type: string }
+        summary: { type: string }
+        durationMinutes: { type: integer }
+        written: { type: boolean, description: 'Bài đã có nội dung; false là "đang biên soạn".' }
+        practiceCount: { type: integer, description: Số câu đang dùng trong Luyện tập nhanh. }
+
+    ChapterOutline:
+      type: object
+      required: [id, order, title, lessons]
+      properties:
+        id: { type: string }
+        order: { type: integer, minimum: 1, description: Chương thứ mấy của khóa. }
+        title: { type: string }
+        lessons:
+          type: array
+          items: { $ref: "#/components/schemas/LessonOutline" }
+
+    CourseOutline:
+      type: object
+      required: [id, title, grade, description, comingSoon, chapters]
+      properties:
+        id: { type: string, description: 'Ví dụ "hoa-hoc-10".' }
+        title: { type: string }
+        grade: { type: integer, minimum: 10, maximum: 12 }
+        description: { type: string }
+        comingSoon: { type: boolean, description: "Chưa ra mắt: học sinh chỉ xem lộ trình, chưa học, chưa làm bài, chưa mở lớp." }
+        author: { type: string, description: Người biên soạn; vắng khi chưa đặt. }
+        chapters:
+          type: array
+          items: { $ref: "#/components/schemas/ChapterOutline" }
+
+    LessonDetail:
+      type: object
+      required: [id, courseId, chapterId, chapterOrder, position, title, summary, durationMinutes, content, practiceQuestions, previousLessonId, nextLessonId]
+      properties:
+        id: { type: string }
+        courseId: { type: string }
+        chapterId: { type: string }
+        chapterOrder: { type: integer }
+        position: { type: integer, minimum: 1, description: Bài thứ mấy trong chương. }
+        title: { type: string }
+        summary: { type: string }
+        durationMinutes: { type: integer }
+        content:
+          type: array
+          description: Rỗng khi bài đang được biên soạn.
+          items: { $ref: "#/components/schemas/LessonBlock" }
+        practiceQuestions:
+          type: array
+          description: Luyện tập nhanh của bài, không có đáp án.
+          items: { $ref: "#/components/schemas/PublicQuestion" }
+        previousLessonId: { type: [string, "null"], description: Bài trước trong khóa (qua cả chương). }
+        nextLessonId: { type: [string, "null"] }
+
+    QuestionBase:
+      type: object
+      required: [id, chapterId, topic, level, prompt, explanation]
+      properties:
+        id: { type: string, maxLength: 96 }
+        chapterId: { type: string }
+        lessonId: { type: string, description: 'Bài câu này kiểm, cho "Ôn lại bài".' }
+        topic: { type: string, maxLength: 80 }
+        level: { $ref: "#/components/schemas/QuestionLevel" }
+        prompt: { type: string }
+        hint: { type: string }
+        explanation: { type: string }
+        tool:
+          type: object
+          required: [href, label]
+          properties:
+            href: { type: string, description: 'Đường dẫn trong app, bắt đầu bằng "/".' }
+            label: { type: string }
+
+    Question:
+      description: |
+        Câu hỏi đầy đủ, kèm đáp án và lời giải (như kiểu `Question` của web). Chỉ giáo viên, admin, service khác, hoặc học sinh với câu
+        mình đã trả lời mới nhận được.
+      oneOf:
+        - allOf:
+            - { $ref: "#/components/schemas/QuestionBase" }
+            - type: object
+              required: [type, options, answerIndex]
+              properties:
+                type: { const: single }
+                options: { type: array, minItems: 4, maxItems: 4, items: { type: string } }
+                answerIndex: { type: integer, minimum: 0, maximum: 3 }
+        - allOf:
+            - { $ref: "#/components/schemas/QuestionBase" }
+            - type: object
+              required: [type, statements]
+              properties:
+                type: { const: truefalse }
+                statements:
+                  type: array
+                  minItems: 4
+                  maxItems: 4
+                  items:
+                    type: object
+                    required: [text, answer, explanation]
+                    properties:
+                      text: { type: string }
+                      answer: { type: boolean }
+                      explanation: { type: string }
+        - allOf:
+            - { $ref: "#/components/schemas/QuestionBase" }
+            - type: object
+              required: [type, answer]
+              properties:
+                type: { const: short }
+                answer: { type: string, maxLength: 4, description: 'Một số, dấu phẩy thập phân ("2,24", "-1").' }
+
+    BankQuestion:
+      description: Câu của ngân hàng kèm đáp án, khóa của nó và đã nghỉ hay chưa.
+      allOf:
+        - { $ref: "#/components/schemas/Question" }
+        - type: object
+          required: [courseId, retired]
+          properties:
+            courseId: { type: string }
+            retired: { type: boolean }
+
+    PracticeCatalog:
+      type: object
+      required: [version, chapters, questions, openExamQuestions]
+      properties:
+        version: { $ref: "#/components/schemas/ContentVersion" }
+        chapters:
+          type: array
+          description: Mọi chương của mọi khóa, theo khối rồi thứ tự chương.
+          items:
+            type: object
+            required: [courseId, courseTitle, grade, id, order, title, lessonCount, questionCount]
+            properties:
+              courseId: { type: string }
+              courseTitle: { type: string }
+              grade: { type: integer }
+              id: { type: string }
+              order: { type: integer }
+              title: { type: string }
+              lessonCount: { type: integer }
+              questionCount: { type: integer, description: Số câu đang dùng. }
+        questions:
+          type: array
+          description: Mọi câu đang dùng, không có đề bài hay đáp án.
+          items:
+            type: object
+            required: [id, type, level, chapterId]
+            properties:
+              id: { type: string }
+              type: { $ref: "#/components/schemas/QuestionType" }
+              level: { $ref: "#/components/schemas/QuestionLevel" }
+              chapterId: { type: string }
+              lessonId: { type: string }
+        openExamQuestions:
+          type: array
+          description: Câu nằm trong đề đang mở (tình trạng `available`), kèm đề bài.
+          items:
+            type: object
+            required: [id, prompt]
+            properties:
+              id: { type: string }
+              prompt: { type: string }
+
+    LessonDraft:
+      type: object
+      required: [id, title, summary, durationMinutes, content, practiceQuestionIds]
+      properties:
+        id: { type: string, pattern: "^[a-z0-9][a-z0-9-]{0,95}$" }
+        title: { type: string, maxLength: 120 }
+        summary: { type: string, maxLength: 300 }
+        durationMinutes: { type: integer, minimum: 1, maximum: 180 }
+        content:
+          type: array
+          maxItems: 80
+          items: { $ref: "#/components/schemas/LessonBlock" }
+        practiceQuestionIds: { type: array, items: { type: string } }
+
+    ChapterDraft:
+      type: object
+      required: [id, title, lessons]
+      properties:
+        id: { type: string, pattern: "^[a-z0-9][a-z0-9-]{0,95}$" }
+        title: { type: string, maxLength: 120 }
+        lessons:
+          type: array
+          items: { $ref: "#/components/schemas/LessonDraft" }
+
+    CourseDraft:
+      description: Một khóa như admin soạn (kiểu `CourseDraft` của web). Chương thứ n là `chapters[n-1]`.
+      type: object
+      required: [id, title, description, comingSoon, author, chapters]
+      properties:
+        id: { type: string }
+        title: { type: string, maxLength: 80 }
+        description: { type: string, maxLength: 400 }
+        comingSoon: { type: boolean }
+        author: { type: string, maxLength: 80, description: Chuỗi rỗng là chưa đặt. }
+        chapters:
+          type: array
+          minItems: 1
+          items: { $ref: "#/components/schemas/ChapterDraft" }
+
+    ExerciseSetInput:
+      type: object
+      required: [title, courseId, chapterId, difficulty, questionIds, experiencePerCorrect, completionBonus, author]
+      properties:
+        title: { type: string, maxLength: 120 }
+        courseId: { type: string }
+        chapterId: { type: string }
+        difficulty: { type: string, enum: [easy, medium, hard] }
+        questionIds: { type: array, maxItems: 40, items: { type: string } }
+        experiencePerCorrect: { type: integer, minimum: 1, maximum: 100 }
+        completionBonus: { type: integer, minimum: 0, maximum: 200 }
+        author: { type: string, maxLength: 80, description: Bắt buộc; mặc định trên giao diện là "PkKemis". Bộ của bản gốc không ghi người soạn thì máy chủ trả "PkKemis". }
+
+    ExerciseSet:
+      description: Một bộ bài tập đầy đủ như admin thấy.
+      allOf:
+        - { $ref: "#/components/schemas/ExerciseSetInput" }
+        - type: object
+          required: [id, chapterLabel]
+          properties:
+            id: { type: string }
+            chapterLabel: { type: string, description: '"Chương n", máy chủ đặt theo vị trí chương.' }
+
+    ExamInput:
+      type: object
+      required: [title, description, courseId, scopeLabel, durationMinutes, questionIds, status, passPercent, experiencePerCorrect, completionBonus, author]
+      properties:
+        title: { type: string, maxLength: 120 }
+        description: { type: string, maxLength: 400 }
+        courseId: { type: string }
+        scopeLabel: { type: string, maxLength: 40, description: '"Chương 1–4".' }
+        durationMinutes: { type: integer, minimum: 5, maximum: 180 }
+        questionIds: { type: array, maxItems: 60, items: { type: string } }
+        status: { type: string, enum: [available, upcoming, completed] }
+        opensAt: { type: string, format: date, description: Bắt buộc khi `upcoming`. }
+        passPercent: { type: integer, minimum: 0, maximum: 100 }
+        experiencePerCorrect: { type: integer, minimum: 1, maximum: 100 }
+        completionBonus: { type: integer, minimum: 0, maximum: 200 }
+        author: { type: string, maxLength: 80 }
+
+    Exam:
+      description: Một đề thi đầy đủ như admin thấy.
+      allOf:
+        - { $ref: "#/components/schemas/ExamInput" }
+        - type: object
+          required: [id]
+          properties:
+            id: { type: string }
+
+    AdminCourse:
+      type: object
+      required: [draft, grade, origin, revision, updatedAt, restoreBlocked]
+      properties:
+        draft: { $ref: "#/components/schemas/CourseDraft" }
+        grade: { type: integer }
+        origin: { type: string, enum: [sample, edited], description: "Khóa không thêm được, nên không có `new`." }
+        revision: { type: integer }
+        updatedAt: { type: string, format: date-time }
+        restoreBlocked:
+          type: [string, "null"]
+          description: Vì sao chưa khôi phục bản gốc được (chương admin thêm còn câu hoặc bộ); null khi được.
+
+    AdminQuestion:
+      type: object
+      required: [question, courseId, origin, retired, revision]
+      properties:
+        question: { $ref: "#/components/schemas/Question" }
+        courseId: { type: string }
+        origin: { $ref: "#/components/schemas/Origin" }
+        retired: { type: boolean }
+        revision: { type: integer }
+        sample:
+          description: Bản gốc, chỉ khi `origin` là `edited`.
+          allOf:
+            - { $ref: "#/components/schemas/Question" }
+
+    AdminExerciseSet:
+      type: object
+      required: [item, origin, removed, revision, attemptCount]
+      properties:
+        item: { $ref: "#/components/schemas/ExerciseSet" }
+        origin: { $ref: "#/components/schemas/Origin" }
+        removed: { type: boolean }
+        revision: { type: integer }
+        attemptCount: { type: integer, description: Số lượt học sinh đã nộp. }
+
+    AdminExam:
+      type: object
+      required: [item, origin, removed, revision, attemptCount]
+      properties:
+        item: { $ref: "#/components/schemas/Exam" }
+        origin: { $ref: "#/components/schemas/Origin" }
+        removed: { type: boolean }
+        revision: { type: integer }
+        attemptCount: { type: integer }
+
+    AdminContent:
+      type: object
+      required: [version, pristine, importedAt, courses, questions, exerciseSets, exams]
+      properties:
+        version: { $ref: "#/components/schemas/ContentVersion" }
+        pristine: { type: boolean, description: Chưa ai sửa gì từ lần nạp bản gốc (điều kiện để chuyển file của bản thử). }
+        importedAt: { type: [string, "null"], format: date-time }
+        courses:
+          type: array
+          items: { $ref: "#/components/schemas/AdminCourse" }
+        questions:
+          type: array
+          description: Mọi câu, kể cả đã nghỉ; bản gốc trước, theo thứ tự trong ngân hàng.
+          items: { $ref: "#/components/schemas/AdminQuestion" }
+        exerciseSets:
+          type: array
+          description: Kể cả bộ đã gỡ.
+          items: { $ref: "#/components/schemas/AdminExerciseSet" }
+        exams:
+          type: array
+          description: Kể cả đề đã gỡ.
+          items: { $ref: "#/components/schemas/AdminExam" }
+
+    ContentEdits:
+      description: |
+        Nguyên nội dung `.data/admin-content.json` của bản thử (kiểu `ContentEdits` version 1 của web). Trường lạ và trường của học sinh mẫu
+        bị bỏ qua.
+      type: object
+      required: [version, courses, questions, retired]
+      properties:
+        version: { const: 1 }
+        courses:
+          type: object
+          description: Mã khóa → khóa như `CourseDraft` (bản lưu cũ có thể thiếu `author`; khi đó giữ người biên soạn của bản gốc).
+          additionalProperties: { type: object }
+        questions:
+          type: object
+          description: Mã câu → câu như `Question`.
+          additionalProperties: { type: object }
+        retired: { type: array, items: { type: string } }
+        sets:
+          type: object
+          description: Mã bộ → bộ như `ExerciseSet` (thiếu `author` thì là "PkKemis").
+          additionalProperties: { type: object }
+        exams:
+          type: object
+          description: Mã đề → đề như `Exam` (thiếu `author` thì là "PkKemis").
+          additionalProperties: { type: object }
+        removedPractice: { type: array, items: { type: string } }
+
+    ImportResult:
+      type: object
+      required: [version, alreadyImported, counts]
+      properties:
+        version: { $ref: "#/components/schemas/ContentVersion" }
+        alreadyImported: { type: boolean }
+        counts:
+          type: object
+          required: [courses, questions, retired, exerciseSets, exams, removed]
+          properties:
+            courses: { type: integer }
+            questions: { type: integer }
+            retired: { type: integer }
+            exerciseSets: { type: integer }
+            exams: { type: integer }
+            removed: { type: integer }
+
+    ContentChange:
+      type: object
+      required: [id, actorId, action, entity, entityId, title, version, createdAt]
+      properties:
+        id: { type: string, description: Số thứ tự (chuỗi số). }
+        actorId: { type: string, format: uuid }
+        action:
+          type: string
+          enum:
+            - COURSE_SAVED
+            - COURSE_RESTORED
+            - QUESTION_CREATED
+            - QUESTION_SAVED
+            - QUESTION_RETIRED
+            - QUESTION_UNRETIRED
+            - QUESTION_RESTORED
+            - SET_CREATED
+            - SET_SAVED
+            - SET_REMOVED
+            - SET_UNREMOVED
+            - SET_RESTORED
+            - EXAM_CREATED
+            - EXAM_SAVED
+            - EXAM_REMOVED
+            - EXAM_UNREMOVED
+            - EXAM_RESTORED
+            - CONTENT_RESET
+            - CONTENT_IMPORTED
+        entity: { type: string, enum: [course, question, exercise_set, exam, content] }
+        entityId: { type: string }
+        title: { type: string, description: "Tên khóa, bộ, đề hoặc chủ đề của câu lúc đó." }
+        version: { $ref: "#/components/schemas/ContentVersion" }
+        createdAt: { type: string, format: date-time }
+
+    ContentSnapshot:
+      type: object
+      required: [version, courses, questions, retired, exerciseSets, exams]
+      properties:
+        version: { $ref: "#/components/schemas/ContentVersion" }
+        courses:
+          type: array
+          items:
+            allOf:
+              - { $ref: "#/components/schemas/CourseDraft" }
+              - type: object
+                required: [grade]
+                properties:
+                  grade: { type: integer }
+        questions:
+          type: array
+          description: Mọi câu, kể cả đã nghỉ.
+          items: { $ref: "#/components/schemas/Question" }
+        retired: { type: array, items: { type: string } }
+        exerciseSets:
+          type: array
+          description: Bộ chưa bị gỡ; `questionIds` như đã lưu (chưa lọc câu nghỉ).
+          items: { $ref: "#/components/schemas/ExerciseSet" }
+        exams:
+          type: array
+          items: { $ref: "#/components/schemas/Exam" }
+
+    Catalog:
+      type: object
+      required: [version, courses]
+      properties:
+        version: { $ref: "#/components/schemas/ContentVersion" }
+        courses:
+          type: array
+          items:
+            type: object
+            required: [id, title, grade, comingSoon, chapters]
+            properties:
+              id: { type: string }
+              title: { type: string }
+              grade: { type: integer }
+              comingSoon: { type: boolean }
+              chapters:
+                type: array
+                items:
+                  type: object
+                  required: [id, order, title]
+                  properties:
+                    id: { type: string }
+                    order: { type: integer }
+                    title: { type: string }
+
+    LessonProgress:
+      type: object
+      required: [lessonId, courseId, status, openedAt, completedAt]
+      properties:
+        lessonId: { type: string }
+        courseId: { type: string }
+        status: { type: string, enum: [in-progress, completed], description: Cùng chữ với `LessonStatus` của web; chưa học thì không có dòng. }
+        openedAt: { type: string, format: date-time }
+        completedAt: { type: [string, "null"], format: date-time }
+
+    MistakeSource:
+      type: object
+      required: [kind, refId, title]
+      properties:
+        kind: { type: string, enum: [exercise, exam, lesson, quick, class_work] }
+        refId: { type: string, description: 'Mã bộ, đề, bài, bài của lớp; `quick` là "quick".' }
+        title: { type: string }
+        courseId: { type: string, description: Khóa của bài (để dựng đường dẫn bài học). }
+
+    MistakeEntry:
+      type: object
+      required: [questionId, source, lastWrongAnswer, wrongCount, firstWrongOn, stage, dueOn, question]
+      properties:
+        questionId: { type: string }
+        source: { $ref: "#/components/schemas/MistakeSource" }
+        lastWrongAnswer: { $ref: "#/components/schemas/Answer" }
+        wrongCount: { type: integer, minimum: 1 }
+        firstWrongOn: { type: string, format: date }
+        stage:
+          type: integer
+          minimum: 0
+          maximum: 3
+          description: 0–2 ôn sau 1, 3, 7 ngày; 3 là "đã nhớ" (rời hàng ôn). Ôn sai thì về 0.
+        dueOn: { type: string, format: date }
+        lastReviewedOn: { type: string, format: date }
+        question: { $ref: "#/components/schemas/Question" }
+
+    LeaderboardEntry:
+      type: object
+      required: [userId, rank, fullName, avatarUrl, avatarInitials, level, xp, rankChange, isMe]
+      properties:
+        userId: { type: string, format: uuid }
+        rank: { type: integer, minimum: 1 }
+        fullName: { type: string }
+        avatarUrl: { type: [string, "null"], format: uri }
+        avatarInitials: { type: string, description: Chữ cái đầu của hai từ cuối của tên. }
+        level: { type: integer, description: Cấp theo tổng XP mọi thời gian. }
+        xp: { type: integer, description: XP trong kỳ. }
+        rankChange: { type: [integer, "null"] }
+        isMe: { type: boolean }
+
+    LeaderboardBoard:
+      type: object
+      required: [period, from, totalParticipants, entries, me, above, meHidden, computedAt]
+      properties:
+        period: { type: string, enum: [week, month, all] }
+        from: { type: [string, "null"], format: date-time, description: Đầu kỳ; null với `all`. }
+        totalParticipants: { type: integer, description: Số học sinh có hạng trong kỳ. }
+        entries:
+          type: array
+          items: { $ref: "#/components/schemas/LeaderboardEntry" }
+        me:
+          description: Dòng của người gọi; null với giáo viên, admin, học sinh chưa có XP trong kỳ hoặc đang ẩn.
+          oneOf:
+            - { $ref: "#/components/schemas/LeaderboardEntry" }
+            - { type: "null" }
+        above:
+          description: Người đứng ngay trên `me`; null khi `me` null hoặc đứng đầu.
+          oneOf:
+            - { $ref: "#/components/schemas/LeaderboardEntry" }
+            - { type: "null" }
+        meHidden: { type: boolean, description: Người gọi đang bật "ẩn khỏi bảng xếp hạng". }
+        computedAt: { type: string, format: date-time }
+
+    ClassWorkResult:
+      type: object
+      required: [attemptId, userId, workId, workTitle, kind, submittedAt, score10, questions]
+      properties:
+        attemptId: { type: string, format: uuid, description: Mã lần làm ở classroom; khóa chống lặp. }
+        userId: { type: string, format: uuid }
+        workId: { type: string, format: uuid }
+        workTitle: { type: string, maxLength: 120 }
+        kind: { type: string, enum: [exercise, exam] }
+        submittedAt: { type: string, format: date-time }
+        score10: { type: number, minimum: 0, maximum: 10 }
+        passPercent: { type: number, minimum: 0, maximum: 100, description: Chỉ đề; điểm đạt giáo viên đặt. }
+        questions:
+          type: array
+          minItems: 1
+          maxItems: 40
+          items:
+            type: object
+            required: [questionId, source, answer, share, correct, complete]
+            properties:
+              questionId: { type: string }
+              source: { type: string, enum: [bank, own] }
+              answer:
+                oneOf:
+                  - { $ref: "#/components/schemas/Answer" }
+                  - { type: "null" }
+              share: { type: number, minimum: 0, maximum: 1 }
+              correct: { type: boolean }
+              complete: { type: boolean }
+              question:
+                description: "Bắt buộc với câu tự soạn (`own`): bản chụp đầy đủ để sổ tay hiện và ôn được."
+                allOf:
+                  - { $ref: "#/components/schemas/Question" }

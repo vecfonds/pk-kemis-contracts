@@ -1,10 +1,13 @@
 openapi: 3.1.0
 info:
   title: PkKemis identity
-  version: 0.4.0
+  version: 0.5.0
   summary: Tài khoản, đăng nhập, token và vai trò.
   description: |
     Đã được chủ dự án duyệt ngày 13/10/2026 (docs/backend/M1-IDENTITY.md).
+
+    0.5.0 (docs/backend/M6-CONTENT.md, lát L7): quyền riêng tư "ẩn khỏi bảng xếp hạng" (`/v1/me/privacy`), learning đọc qua
+    `/internal/users/batch`. Các thao tác mới ghi lát cài nó ở `x-slice`.
 
     - Chỉ thêm, không xóa hay đổi nghĩa của trường đã phát hành.
     - Từ 0.3.0 các thao tác admin (`/v1/admin/*`) đã được cài (lát D của M4); `x-phase: 2` còn lại, nếu có, là thao tác chưa cài.
@@ -233,6 +236,45 @@ paths:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
         "429": { $ref: "#/components/responses/TooManyRequests" }
+
+  /v1/me/privacy:
+    get:
+      tags: [me]
+      operationId: getMyPrivacy
+      x-slice: L7
+      summary: Cài đặt quyền riêng tư của mình
+      description: Giai đoạn 1 chỉ có "ẩn khỏi bảng xếp hạng"; các quyền khác (ai xem tiến độ, ai nhắn tin…) thêm khi có `social`.
+      responses:
+        "200":
+          description: Cài đặt
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PrivacySettings" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    patch:
+      tags: [me]
+      operationId: updateMyPrivacy
+      x-slice: L7
+      summary: Sửa cài đặt quyền riêng tư
+      description: |
+        Chỉ các trường gửi lên mới đổi. Bảng xếp hạng của learning thấy thay đổi sau tối đa 10 phút (learning đệm tên và cờ này).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              minProperties: 1
+              properties:
+                hideFromLeaderboard: { type: boolean }
+      responses:
+        "200":
+          description: Cài đặt sau khi sửa
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PrivacySettings" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
 
   /v1/admin/users:
     get:
@@ -505,6 +547,15 @@ components:
         role: { $ref: "#/components/schemas/Role" }
         avatarUrl: { type: [string, "null"], format: uri }
         locked: { type: boolean }
+        hideFromLeaderboard:
+          type: boolean
+          description: "0.5.0 (L7): người dùng đã bật ẩn khỏi bảng xếp hạng. Vắng như false."
+
+    PrivacySettings:
+      type: object
+      required: [hideFromLeaderboard]
+      properties:
+        hideFromLeaderboard: { type: boolean, description: Mặc định false (có tên trên bảng xếp hạng). }
 
     RegisterRequest:
       type: object
