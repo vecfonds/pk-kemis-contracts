@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: PkKemis classroom
-  version: 0.5.0
+  version: 0.6.0
   summary: Lớp học, suất học, học sinh, bài giáo viên soạn, bài giao, làm bài và kết quả.
   description: |
     Lát A và B của M4 (docs/backend/M4-CLASSROOM.md): tạo lớp, vào lớp bằng mã, suất học và hạn dùng, mua thêm suất, gia hạn, rời lớp, xóa học sinh,
@@ -171,6 +171,7 @@ paths:
       summary: Mở lớp chính thức, mua thêm suất hoặc gia hạn (giáo viên của lớp)
       description: |
         Người lập lớp bị thu vai trò giáo viên chỉ gia hạn (`renewal`) được; `open` và `extra` thì 403.
+        Lớp bị admin thu quyền giáo viên (`teacherRevoked`) vẫn mua được, và mua xong thì quyền được mở lại. Lớp bị ẩn thì không mua được (403 `class_hidden`).
         - `open`: lớp đang dùng thử mở chính thức; chấm dứt dùng thử ngay; số suất ít nhất bằng số học sinh; được giảm theo số suất.
         - `extra`: thêm suất cho lớp đang chạy bằng suất đã mua, dùng tới hết năm học; giá lẻ.
         - `renewal`: gia hạn sang năm học sau (nối ngay sau năm đã trả, hoặc từ bây giờ nếu đã hết hạn); số suất ít nhất bằng số học sinh; giá lẻ; chỉ một lần cho mỗi năm học.
@@ -371,6 +372,109 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /v1/admin/classes/{classId}/revoke-teacher:
+    post:
+      tags: [classes]
+      operationId: adminRevokeTeacher
+      summary: Thu quyền thao tác của giáo viên trên lớp (admin)
+      description: |
+        Giáo viên vẫn giữ vai trò giáo viên và các lớp khác. Riêng lớp này: không giao bài, không xem kết quả hay học sinh, không xóa học sinh,
+        không soạn giao bài (403 `class_revoked`); học sinh học bình thường. Giáo viên chỉ mua suất (gia hạn, mua thêm) được, và mua xong thì quyền được mở lại;
+        admin cũng trả lại được bằng `restore-teacher`. Cần lý do, ghi vào nhật ký kiểm toán.
+      parameters:
+        - { $ref: "#/components/parameters/ClassId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, minLength: 1, maxLength: 500 }
+      responses:
+        "204": { description: "Đã làm; làm lại lần nữa cũng 204 và không ghi thêm nhật ký" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/admin/classes/{classId}/restore-teacher:
+    post:
+      tags: [classes]
+      operationId: adminRestoreTeacher
+      summary: Trả quyền thao tác cho giáo viên trên lớp (admin)
+      description: |
+        Bỏ trạng thái thu quyền của `revoke-teacher`. Cần lý do, ghi vào nhật ký kiểm toán.
+      parameters:
+        - { $ref: "#/components/parameters/ClassId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, minLength: 1, maxLength: 500 }
+      responses:
+        "204": { description: "Đã làm; làm lại lần nữa cũng 204 và không ghi thêm nhật ký" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/admin/classes/{classId}/hide:
+    post:
+      tags: [classes]
+      operationId: adminHideClass
+      summary: Ẩn lớp (admin)
+      description: |
+        Hoàn tác được. Lớp ẩn: học sinh không thấy, không làm bài (như không có lớp); giáo viên thấy lớp có dấu "đang bị ẩn" và không thao tác được
+        (403 `class_hidden`, kể cả mua suất). Dữ liệu giữ nguyên. Cần lý do, ghi vào nhật ký kiểm toán.
+      parameters:
+        - { $ref: "#/components/parameters/ClassId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, minLength: 1, maxLength: 500 }
+      responses:
+        "204": { description: "Đã làm; làm lại lần nữa cũng 204 và không ghi thêm nhật ký" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/admin/classes/{classId}/unhide:
+    post:
+      tags: [classes]
+      operationId: adminUnhideClass
+      summary: Hiện lại lớp đã ẩn (admin)
+      description: |
+        Mọi thứ trở lại như trước khi ẩn. Cần lý do, ghi vào nhật ký kiểm toán.
+      parameters:
+        - { $ref: "#/components/parameters/ClassId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, minLength: 1, maxLength: 500 }
+      responses:
+        "204": { description: "Đã làm; làm lại lần nữa cũng 204 và không ghi thêm nhật ký" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /v1/admin/classes/{classId}/delete:
     post:
       tags: [classes]
@@ -427,7 +531,7 @@ paths:
                       properties:
                         id: { type: string, format: uuid }
                         actorId: { type: string, format: uuid }
-                        action: { type: string, enum: [CLASS_DELETED] }
+                        action: { type: string, enum: [CLASS_DELETED, TEACHER_REVOKED, TEACHER_RESTORED, CLASS_HIDDEN, CLASS_UNHIDDEN] }
                         classId: { type: string, format: uuid }
                         className: { type: string }
                         reason: { type: string }
@@ -666,6 +770,8 @@ components:
             - work_in_use
             - too_many_attempts
             - attempt_limit_reached
+            - class_revoked
+            - class_hidden
             - internal_error
         detail: { type: string, description: "Thông báo tiếng Việt, hiển thị được cho người dùng." }
         errors:
@@ -723,6 +829,8 @@ components:
         createdAt: { type: string, format: date-time }
         term: { $ref: "#/components/schemas/ClassTerm" }
         teacher: { $ref: "#/components/schemas/ClassPerson" }
+        teacherRevoked: { type: boolean, description: Admin đã thu quyền thao tác của giáo viên trên lớp này; mua suất sẽ mở lại. }
+        hidden: { type: boolean, description: Admin đã ẩn lớp; học sinh không thấy lớp ẩn. }
         assignments:
           type: array
           description: |
