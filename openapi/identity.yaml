@@ -1,13 +1,13 @@
 openapi: 3.1.0
 info:
   title: PkKemis identity
-  version: 0.2.0
+  version: 0.3.0
   summary: Tài khoản, đăng nhập, token và vai trò.
   description: |
     Đã được chủ dự án duyệt ngày 13/10/2026 (docs/backend/M1-IDENTITY.md).
 
     - Chỉ thêm, không xóa hay đổi nghĩa của trường đã phát hành.
-    - Thao tác nào gắn `x-phase: 2` có trong hợp đồng để định hình, nhưng giai đoạn 1 chưa cài.
+    - Từ 0.3.0 các thao tác admin (`/v1/admin/*`) đã được cài (lát D của M4); `x-phase: 2` còn lại, nếu có, là thao tác chưa cài.
     - Thông báo lỗi (`detail`) bằng tiếng Việt, hiển thị được cho người dùng; mã `code` ổn định, dùng để xử lý trong mã.
 servers:
   - url: http://identity:8080
@@ -238,7 +238,6 @@ paths:
     get:
       tags: [admin]
       operationId: listUsers
-      x-phase: 2
       summary: Danh sách người dùng
       parameters:
         - name: role
@@ -267,7 +266,6 @@ paths:
     patch:
       tags: [admin]
       operationId: changeRole
-      x-phase: 2
       summary: Đổi vai trò
       description: Admin không tự đổi vai trò của mình (`self_action_forbidden`). Mọi thao tác ghi vào nhật ký kiểm toán.
       parameters:
@@ -282,7 +280,7 @@ paths:
           description: Người dùng sau khi đổi
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/User" }
+              schema: { $ref: "#/components/schemas/AdminUser" }
         "400": { $ref: "#/components/responses/ValidationFailed" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -292,7 +290,6 @@ paths:
     post:
       tags: [admin]
       operationId: lockUser
-      x-phase: 2
       summary: Khóa tài khoản
       description: Thu hồi mọi refresh token. Admin không tự khóa mình (`self_action_forbidden`).
       parameters:
@@ -313,7 +310,6 @@ paths:
     post:
       tags: [admin]
       operationId: unlockUser
-      x-phase: 2
       summary: Mở khóa tài khoản
       parameters:
         - { $ref: "#/components/parameters/UserId" }
@@ -438,6 +434,15 @@ components:
           description: Giai đoạn 1 luôn `false` vì chưa gửi email xác minh; đăng nhập không đòi hỏi trường này.
         createdAt: { type: string, format: date-time }
 
+    AdminUser:
+      description: Người dùng như admin thấy; thêm `locked` so với `User`.
+      allOf:
+        - $ref: "#/components/schemas/User"
+        - type: object
+          required: [locked]
+          properties:
+            locked: { type: boolean }
+
     UserSummary:
       type: object
       required: [id, fullName, role, locked]
@@ -558,7 +563,7 @@ components:
       properties:
         items:
           type: array
-          items: { $ref: "#/components/schemas/User" }
+          items: { $ref: "#/components/schemas/AdminUser" }
         page: { type: integer }
         size: { type: integer }
         total: { type: integer, format: int64 }

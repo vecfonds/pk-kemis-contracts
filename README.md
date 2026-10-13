@@ -6,7 +6,7 @@ Hợp đồng giữa các service của PkKemis và nguồn sự thật cho API.
 
 | File | Service | Trạng thái |
 |---|---|---|
-| `openapi/identity.yaml` | identity | 0.2.0, đã duyệt và đã cài (M1, M2) |
+| `openapi/identity.yaml` | identity | 0.3.0, đã duyệt và đã cài (M1, M2) |
 | `openapi/learning.yaml` | learning | 0.1.0, đã cài và đối chiếu bằng `test/contract.spec.ts` ở learning (M3) |
 | `openapi/classroom.yaml` | classroom | 0.3.0, lát A–C của M4 (lớp, suất, bài giao, làm bài, kết quả), đối chiếu bằng `test/contract.spec.ts` ở classroom |
 
