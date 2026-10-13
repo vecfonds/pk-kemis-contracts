@@ -909,8 +909,8 @@ components:
         attemptId: { type: string, format: uuid }
         correct: { type: integer, description: Số câu đúng hoàn toàn. }
         total: { type: integer }
-        earned: { type: number, description: Điểm trên thang điểm của đề (theo phần). }
-        max: { type: number }
+        earned: { type: integer, description: 1/100 điểm đạt được (như learning.yaml). }
+        max: { type: integer, description: 1/100 điểm tối đa của đề. }
         score10: { type: number, description: Điểm trên thang 10. }
         seconds: { type: integer }
         passed: { type: boolean, description: Chỉ đề thi. }
@@ -934,8 +934,8 @@ components:
         submittedAt: { type: string, format: date-time }
         correct: { type: integer }
         total: { type: integer }
-        earned: { type: number }
-        max: { type: number }
+        earned: { type: integer, description: 1/100 điểm đạt được. }
+        max: { type: integer, description: 1/100 điểm tối đa. }
         score10: { type: number }
         wrongQuestionIds:
           type: array
