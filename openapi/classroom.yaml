@@ -1,0 +1,424 @@
+openapi: 3.1.0
+info:
+  title: PkKemis classroom
+  version: 0.1.0
+  summary: Lớp học, suất học và học sinh trong lớp.
+  description: |
+    Lát A của M4 (docs/backend/M4-CLASSROOM.md): tạo lớp, vào lớp bằng mã, suất học và hạn dùng, mua thêm suất, gia hạn, rời lớp, xóa học sinh.
+    Bài giáo viên soạn, bài giao và kết quả (lát B, C) chưa có.
+
+    - Chỉ thêm, không xóa hay đổi nghĩa của trường đã phát hành.
+    - Token là access token của identity (xem identity.yaml); service tự kiểm bằng khóa công khai.
+    - **Máy chủ quyết định** giờ, giá, số suất, hạn dùng, trạng thái lớp, số lớp dùng thử và mã lớp. Máy khách chỉ gửi ý định (số suất, loại mua); số tiền gửi lên bị bỏ qua.
+    - **Thanh toán chỉ mô phỏng** ở giai đoạn 1: service ghi lần mua với số tiền tự tính, chưa có cổng thanh toán.
+    - Lớp không phải của mình trông như không tồn tại (404).
+    - Lỗi theo RFC 9457 (`application/problem+json`), cùng dạng với identity.
+servers:
+  - url: http://classroom:8080
+    description: Mạng Docker Compose (giai đoạn 1, chưa có gateway)
+security:
+  - bearerAuth: []
+tags:
+  - name: classes
+    description: Lớp, mã lớp, học sinh
+  - name: seats
+    description: Suất học và mua suất
+
+paths:
+  /v1/courses:
+    get:
+      tags: [classes]
+      operationId: listCourses
+      summary: Các khóa học có thể mở lớp
+      description: Khóa sắp ra mắt (`comingSoon`) chưa mở lớp được vì chưa bán suất.
+      responses:
+        "200":
+          description: Danh sách
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Course" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/classes:
+    get:
+      tags: [classes]
+      operationId: listClasses
+      summary: Các lớp của mình
+      description: Học sinh thấy các lớp đã vào, giáo viên thấy lớp mình lập (kèm số lớp dùng thử còn lại), admin thấy mọi lớp.
+      responses:
+        "200":
+          description: Danh sách theo thứ tự khối rồi tên lớp
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/ClassSummary" }
+                  trialsLeft:
+                    type: integer
+                    description: Chỉ với giáo viên; số lớp dùng thử còn mở được (tối đa 5, lớp dùng thử đã mở chính thức vẫn tính).
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      tags: [classes]
+      operationId: createClass
+      summary: Mở lớp (giáo viên)
+      description: |
+        Mở lớp dùng thử (20 suất, 7 ngày kể cả ngày mở) hoặc mua suất cho năm học đang diễn ra. Mã lớp tạo tự động từ tên lớp.
+        Mỗi giáo viên mở tối đa 5 lớp dùng thử. Khóa sắp ra mắt không mở được.
+        Giá: 50.000 ₫/suất cho cả năm, tính theo số tháng còn lại; chỉ lúc mở lớp mới giảm theo số suất (từ 20: 10%, từ 50: 20%).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateClassRequest" }
+      responses:
+        "201":
+          description: Lớp vừa mở
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ClassDetail" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409":
+          description: Hết lớp dùng thử (`trial_limit_reached`) hoặc khóa sắp ra mắt (`course_coming_soon`)
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /v1/classes/join:
+    post:
+      tags: [classes]
+      operationId: joinClass
+      summary: Vào lớp bằng mã (học sinh)
+      description: |
+        Mã gõ thế nào cũng được ("hoa-10a1", " HOA-10A1 "). Mỗi học sinh giữ một suất. Đoán mã bị giới hạn: 10 mã sai trong 15 phút thì bị chặn (429).
+        Lớp đã đủ suất, hoặc đã hết hạn, không vào được.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code: { type: string }
+      responses:
+        "200":
+          description: Lớp vừa vào
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ClassSummary" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404":
+          description: Không có lớp nào có mã này (`class_code_unknown`)
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "409":
+          description: Đã ở trong lớp (`already_member`), lớp đủ suất (`class_full`) hoặc hết hạn (`class_expired`)
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+
+  /v1/classes/{classId}:
+    get:
+      tags: [classes]
+      operationId: getClass
+      summary: Một lớp
+      description: |
+        Giáo viên của lớp và admin thấy thêm danh sách học sinh và các lần mua suất; học sinh trong lớp chỉ thấy phần chung.
+        Học sinh không bao giờ thấy email hay ngày sinh của nhau, giáo viên chỉ thấy tên và ảnh đại diện.
+      parameters:
+        - { $ref: "#/components/parameters/ClassId" }
+      responses:
+        "200":
+          description: Lớp
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ClassDetail" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/classes/{classId}/purchases:
+    post:
+      tags: [seats]
+      operationId: buySeats
+      summary: Mở lớp chính thức, mua thêm suất hoặc gia hạn (giáo viên của lớp)
+      description: |
+        - `open`: lớp đang dùng thử mở chính thức; chấm dứt dùng thử ngay; số suất ít nhất bằng số học sinh; được giảm theo số suất.
+        - `extra`: thêm suất cho lớp đang chạy bằng suất đã mua, dùng tới hết năm học; giá lẻ.
+        - `renewal`: gia hạn sang năm học sau (nối ngay sau năm đã trả, hoặc từ bây giờ nếu đã hết hạn); số suất ít nhất bằng số học sinh; giá lẻ; chỉ một lần cho mỗi năm học.
+        Tối đa 500 suất mỗi lần. Số tiền do máy chủ tính theo số tháng còn lại và mức giảm; thanh toán chỉ mô phỏng.
+      parameters:
+        - { $ref: "#/components/parameters/ClassId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PurchaseRequest" }
+      responses:
+        "201":
+          description: Lớp sau khi mua, kèm giấy phép mới
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ClassDetail" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Lớp chưa ở trạng thái mua được loại suất này (`invalid_purchase`)
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /v1/classes/{classId}/leave:
+    post:
+      tags: [classes]
+      operationId: leaveClass
+      summary: Rời lớp (học sinh)
+      description: Suất của học sinh trống lại cho người khác.
+      parameters:
+        - { $ref: "#/components/parameters/ClassId" }
+      responses:
+        "204": { description: Đã rời lớp }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/classes/{classId}/members/{studentId}:
+    delete:
+      tags: [classes]
+      operationId: removeStudent
+      summary: Xóa một học sinh khỏi lớp (giáo viên của lớp)
+      parameters:
+        - { $ref: "#/components/parameters/ClassId" }
+        - name: studentId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "204": { description: Đã xóa }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Access token của identity (RS256).
+
+  parameters:
+    ClassId:
+      name: classId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+
+  responses:
+    ValidationFailed:
+      description: Dữ liệu gửi lên không hợp lệ (`validation_failed`), kèm lỗi từng trường
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    Unauthorized:
+      description: Chưa đăng nhập hoặc token không hợp lệ / hết hạn (`token_invalid`)
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    Forbidden:
+      description: Sai vai trò cho thao tác này (`forbidden`)
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    NotFound:
+      description: Không tìm thấy, hoặc không phải của mình (`not_found`)
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    TooManyRequests:
+      description: Đoán mã lớp quá nhiều lần (`too_many_attempts`); chờ theo `Retry-After`
+      headers:
+        Retry-After:
+          description: Số giây phải chờ
+          schema: { type: integer }
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+
+  schemas:
+    Problem:
+      type: object
+      description: Lỗi theo RFC 9457. Cùng dạng với identity; có thêm các mã của service này.
+      required: [title, status, code]
+      properties:
+        type: { type: string, default: about:blank }
+        title: { type: string }
+        status: { type: integer }
+        code:
+          type: string
+          enum:
+            - validation_failed
+            - token_invalid
+            - forbidden
+            - not_found
+            - class_code_unknown
+            - already_member
+            - class_full
+            - class_expired
+            - trial_limit_reached
+            - course_coming_soon
+            - invalid_purchase
+            - too_many_attempts
+            - internal_error
+        detail: { type: string, description: "Thông báo tiếng Việt, hiển thị được cho người dùng." }
+        errors:
+          type: array
+          items:
+            type: object
+            required: [field, message]
+            properties:
+              field: { type: string }
+              message: { type: string }
+
+    Course:
+      type: object
+      required: [id, title, grade, comingSoon]
+      properties:
+        id: { type: string }
+        title: { type: string }
+        grade: { type: integer, minimum: 10, maximum: 12 }
+        comingSoon: { type: boolean }
+
+    ClassPerson:
+      type: object
+      required: [id, fullName, avatarInitials]
+      properties:
+        id: { type: string, format: uuid }
+        fullName: { type: string }
+        avatarInitials: { type: string }
+
+    ClassTerm:
+      type: object
+      description: Suất, trạng thái và hạn của lớp ngay lúc này.
+      required: [status, total, used, free, trialOnly]
+      properties:
+        status: { type: string, enum: [trial, active, expired], description: "`expired` là tạm khóa: chưa gia hạn hoặc hết dùng thử." }
+        total: { type: integer, description: "Số suất đang chạy, cũng là số học sinh tối đa." }
+        used: { type: integer, description: Số học sinh trong lớp; mỗi người giữ một suất. }
+        free: { type: integer }
+        expiresAt: { type: string, format: date-time, description: "Hết kỳ đang chạy, hoặc kỳ cuối khi đã hết hạn." }
+        schoolYear: { type: string, description: Năm học của kỳ đã trả gần nhất; vắng khi chỉ mới dùng thử. }
+        renewedUntil: { type: string, format: date-time, description: Đã trả cho một kỳ sau; lớp chạy tới lúc đó. }
+        trialOnly: { type: boolean, description: Lớp chưa từng trả tiền. }
+
+    ClassSummary:
+      type: object
+      required: [id, name, grade, schoolYear, teacherId, courseId, joinCode, createdAt, term, teacher]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        grade: { type: integer }
+        schoolYear: { type: string, description: '"2026–2027"' }
+        school: { type: string }
+        teacherId: { type: string, format: uuid }
+        courseId: { type: string }
+        joinCode: { type: string, description: 'Học sinh gõ để vào lớp, ví dụ "HOA-10A1".' }
+        createdAt: { type: string, format: date-time }
+        term: { $ref: "#/components/schemas/ClassTerm" }
+        teacher: { $ref: "#/components/schemas/ClassPerson" }
+
+    ClassDetail:
+      allOf:
+        - $ref: "#/components/schemas/ClassSummary"
+        - type: object
+          properties:
+            licenses:
+              type: array
+              description: Chỉ giáo viên của lớp và admin; mới nhất trước.
+              items: { $ref: "#/components/schemas/License" }
+            members:
+              type: array
+              description: Chỉ giáo viên của lớp và admin.
+              items:
+                allOf:
+                  - $ref: "#/components/schemas/ClassPerson"
+                  - type: object
+                    required: [joinedAt]
+                    properties:
+                      joinedAt: { type: string, format: date-time }
+
+    License:
+      type: object
+      required: [id, classId, courseId, kind, seats, schoolYear, startsAt, expiresAt, months, discountPercent, amount, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        classId: { type: string, format: uuid }
+        courseId: { type: string }
+        kind: { type: string, enum: [trial, open, extra, renewal] }
+        seats: { type: integer }
+        schoolYear: { type: string }
+        startsAt: { type: string, format: date-time }
+        expiresAt: { type: string, format: date-time }
+        payer: { type: string, enum: [teacher, school], description: Vắng với dùng thử. }
+        payerName: { type: string }
+        orderCode: { type: string, description: 'PK + yymmdd + 4 số.' }
+        months: { type: integer, description: "Số tháng tính tiền; 11 là đủ giá, 0 với dùng thử." }
+        discountPercent: { type: integer, description: Chỉ lúc mở lớp. }
+        amount: { type: integer, description: "VND đã trả (mô phỏng), sau khi tính theo tháng và giảm giá." }
+        createdAt: { type: string, format: date-time }
+
+    Payment:
+      type: object
+      required: [payer, payerName]
+      properties:
+        payer: { type: string, enum: [teacher, school] }
+        payerName: { type: string, minLength: 1, maxLength: 80, description: Tên ghi trên hóa đơn. }
+
+    CreateClassRequest:
+      type: object
+      required: [name, grade, courseId, opening]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 40 }
+        grade: { type: integer, minimum: 10, maximum: 12 }
+        courseId: { type: string, description: Phải thuộc khối đã chọn và đã mở. }
+        schoolYear: { type: string, description: Nếu gửi thì phải là năm học đang diễn ra. }
+        school: { type: string, maxLength: 80 }
+        opening:
+          oneOf:
+            - type: object
+              required: [plan]
+              properties:
+                plan: { const: trial }
+            - allOf:
+                - $ref: "#/components/schemas/Payment"
+                - type: object
+                  required: [plan, seats]
+                  properties:
+                    plan: { const: paid }
+                    seats: { type: integer, minimum: 1, maximum: 500 }
+
+    PurchaseRequest:
+      allOf:
+        - $ref: "#/components/schemas/Payment"
+        - type: object
+          required: [kind, seats]
+          properties:
+            kind: { type: string, enum: [open, extra, renewal] }
+            seats: { type: integer, minimum: 1, maximum: 500 }
