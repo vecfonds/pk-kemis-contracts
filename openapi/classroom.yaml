@@ -1,11 +1,11 @@
 openapi: 3.1.0
 info:
   title: PkKemis classroom
-  version: 0.3.0
+  version: 0.4.0
   summary: Lớp học, suất học, học sinh, bài giáo viên soạn, bài giao, làm bài và kết quả.
   description: |
     Lát A và B của M4 (docs/backend/M4-CLASSROOM.md): tạo lớp, vào lớp bằng mã, suất học và hạn dùng, mua thêm suất, gia hạn, rời lớp, xóa học sinh,
-    bài giáo viên soạn (bộ bài tập, đề thi) và giao bài cho lớp. Lát C: học sinh làm bài của lớp (máy chủ chấm lại từ câu trả lời), bài nộp, và kết quả cho giáo viên. Chưa có XP cho bài của lớp.
+    bài giáo viên soạn (bộ bài tập, đề thi) và giao bài cho lớp. Lát D: giáo viên bị thu vai trò (identity đổi về học sinh) vẫn thấy các lớp mình đã lập (`formerlyOwned`) và gia hạn được, không làm gì khác. Lát C: học sinh làm bài của lớp (máy chủ chấm lại từ câu trả lời), bài nộp, và kết quả cho giáo viên. Chưa có XP cho bài của lớp.
 
     - Chỉ thêm, không xóa hay đổi nghĩa của trường đã phát hành.
     - Token là access token của identity (xem identity.yaml); service tự kiểm bằng khóa công khai.
@@ -72,6 +72,12 @@ paths:
                   trialsLeft:
                     type: integer
                     description: Chỉ với giáo viên; số lớp dùng thử còn mở được (tối đa 5, lớp dùng thử đã mở chính thức vẫn tính).
+                  formerlyOwned:
+                    type: array
+                    description: |
+                      Chỉ với tài khoản học sinh đã từng lập lớp (giáo viên bị admin thu vai trò): các lớp đó. Lớp vẫn còn; tài khoản chỉ gia hạn được
+                      (`POST /v1/classes/{id}/purchases` với `renewal`), không quản lý, giao bài, xem kết quả hay thêm bớt học sinh. Trả lại vai trò thì hết trường này.
+                    items: { $ref: "#/components/schemas/ClassSummary" }
         "401": { $ref: "#/components/responses/Unauthorized" }
     post:
       tags: [classes]
@@ -164,6 +170,7 @@ paths:
       operationId: buySeats
       summary: Mở lớp chính thức, mua thêm suất hoặc gia hạn (giáo viên của lớp)
       description: |
+        Người lập lớp bị thu vai trò giáo viên chỉ gia hạn (`renewal`) được; `open` và `extra` thì 403.
         - `open`: lớp đang dùng thử mở chính thức; chấm dứt dùng thử ngay; số suất ít nhất bằng số học sinh; được giảm theo số suất.
         - `extra`: thêm suất cho lớp đang chạy bằng suất đã mua, dùng tới hết năm học; giá lẻ.
         - `renewal`: gia hạn sang năm học sau (nối ngay sau năm đã trả, hoặc từ bây giờ nếu đã hết hạn); số suất ít nhất bằng số học sinh; giá lẻ; chỉ một lần cho mỗi năm học.
@@ -663,7 +670,7 @@ components:
           properties:
             licenses:
               type: array
-              description: Chỉ giáo viên của lớp và admin; mới nhất trước.
+              description: Chỉ giáo viên của lớp, người lập lớp đã bị thu vai trò (để thấy hạn dùng) và admin; mới nhất trước.
               items: { $ref: "#/components/schemas/License" }
             members:
               type: array
