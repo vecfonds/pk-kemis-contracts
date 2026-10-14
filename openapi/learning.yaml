@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: PkKemis learning
-  version: 0.3.0
+  version: 0.3.1
   summary: Nội dung học, bài tập, đề thi, chấm điểm, sổ cái XP, tiến độ, sổ tay lỗi sai, bảng xếp hạng.
   description: |
     Giai đoạn 1 (docs/backend/M3-LEARNING.md): bộ bài tập và đề thi, lượt làm bài do máy chủ chấm, XP, cấp độ, chuỗi ngày.
@@ -9,6 +9,10 @@ info:
     0.3.0 (docs/backend/M6-CONTENT.md): learning sở hữu nội dung học (khóa, chương, bài, ngân hàng câu, bộ bài tập, đề) và công cụ
     soạn của admin; tiến độ bài học; Luyện tập nhanh của bài, luyện nhanh và ôn tập đi qua lượt làm; sổ tay lỗi sai; bảng xếp hạng;
     API nội bộ cho classroom. Mỗi thao tác mới ghi lát cài nó ở `x-slice` (L1–L7); trước lát đó thao tác chưa có.
+
+    0.3.1 (sửa sau soát M6, chỉ thêm): `GET /v1/exercise-sets/{id}`, `GET /v1/exams/{id}` và `GET /v1/questions/{id}` cho học sinh trả
+    409 khi khóa sắp ra mắt (`course_coming_soon`) hoặc đề chưa mở (`exam_not_open`), như bắt đầu lượt làm; `ClassWorkResult.first` (tùy chọn);
+    bản chụp câu tự soạn lưu theo từng bài (`workId`) chứ không toàn cục.
 
     - Chỉ thêm, không xóa hay đổi nghĩa của trường đã phát hành.
     - Token là access token của identity (xem identity.yaml); service tự kiểm bằng khóa công khai, không gọi identity.
@@ -88,6 +92,11 @@ paths:
               schema: { $ref: "#/components/schemas/ExerciseSetDetail" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Khóa sắp ra mắt (`course_coming_soon`), với học sinh; giáo viên và admin xem được
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
 
   /v1/exams:
     get:
@@ -123,6 +132,9 @@ paths:
         Từ 0.3.0 (L4) web không gọi thao tác này cho học sinh trước khi bắt đầu: đề đến cùng lượt làm (`OpenAttempt.questions`) để đồng hồ
         chạy từ lúc thấy đề; trang giới thiệu dùng `ExamSummary`. Hạn chế thao tác này với học sinh là thay đổi phá vỡ, chờ chủ dự án
         (docs/backend/M6-CONTENT.md, câu hỏi 8).
+
+        Từ 0.3.1: học sinh nhận 409 `exam_not_open` khi đề chưa đến giờ mở (`status` = upcoming) và 409 `course_coming_soon` khi khóa sắp
+        ra mắt, để không đọc được câu hỏi trước giờ; giáo viên và admin xem được (xem trước).
       parameters:
         - { $ref: "#/components/parameters/ExamId" }
       responses:
@@ -133,6 +145,11 @@ paths:
               schema: { $ref: "#/components/schemas/ExamDetail" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Đề chưa mở (`exam_not_open`) hoặc khóa sắp ra mắt (`course_coming_soon`), với học sinh
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
 
   /v1/attempts:
     post:
@@ -519,7 +536,9 @@ paths:
       operationId: getPublicQuestion
       x-slice: L1
       summary: Một câu của ngân hàng, không có đáp án (ví dụ để hỏi trên Cộng đồng)
-      description: Mọi vai trò. Câu đã nghỉ vẫn đọc được (`retired`). Câu giáo viên tự soạn (`tq-…`) không ở đây (404).
+      description: |
+        Mọi vai trò. Câu đã nghỉ vẫn đọc được (`retired`). Câu giáo viên tự soạn (`tq-…`) không ở đây (404).
+        Từ 0.3.1: câu của khóa sắp ra mắt thì học sinh nhận 409 `course_coming_soon`.
       parameters:
         - { $ref: "#/components/parameters/QuestionId" }
       responses:
@@ -537,6 +556,11 @@ paths:
                       retired: { type: boolean }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Khóa sắp ra mắt (`course_coming_soon`), với học sinh
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
 
   /v1/practice-catalog:
     get:
@@ -1518,8 +1542,12 @@ paths:
         - **XP** (chỉ lần nộp đầu tiên của học sinh ở mỗi `workId`): Σ làm tròn(`share` × 10) + 20 nếu là bộ bài tập và mọi câu đã trả lời đủ
           (`complete`), hoặc + 40 nếu là đề và `score10` × 10 ≥ max(`passPercent`, 50). Tổng XP từ bài của lớp mỗi ngày (giờ Việt Nam) tối đa
           300; vượt thì cắt, `capped` = true.
-        - **Kết quả câu** ngân hàng ghi vào kết quả mới nhất của học sinh (`/v1/me/results`). Câu ngân hàng mã lạ thì bỏ qua.
+        - **Lần nộp đầu** (0.3.1): classroom biết chắc lượt nào là lần đầu (kể cả khi bài giao cho nhiều lớp) và gửi `first`; có thì learning
+          theo `first` (lượt đầu mới được XP), thiếu thì tự suy từ các lượt đã nhận.
+        - **Kết quả câu** ngân hàng ghi vào kết quả mới nhất của học sinh (`/v1/me/results`). Câu ngân hàng mã lạ, hoặc đã đổi dạng so với
+          lúc chụp (0.3.1), thì bỏ qua câu đó (không tính điểm, không vào sổ tay), không từ chối cả lần nộp; XP vẫn tính từ `share` classroom gửi.
         - **Sổ tay lỗi sai:** câu có trả lời (ít nhất một phần) mà chưa đúng hoàn toàn; câu tự soạn phải gửi kèm `question` (bản chụp đầy đủ).
+          Từ 0.3.1 bản chụp lưu theo `(workId, questionId)`, nên bài của giáo viên này không ghi đè được câu của bài khác dù trùng mã.
         - Cập nhật hoạt động gần nhất của học sinh.
       security:
         - internalKey: []
@@ -2688,6 +2716,9 @@ components:
         submittedAt: { type: string, format: date-time }
         score10: { type: number, minimum: 0, maximum: 10 }
         passPercent: { type: number, minimum: 0, maximum: 100, description: Chỉ đề; điểm đạt giáo viên đặt. }
+        first:
+          type: boolean
+          description: "Từ 0.3.1, tùy chọn: lượt này là lần nộp đầu của học sinh ở bài (classroom quyết). Thiếu thì learning tự suy."
         questions:
           type: array
           minItems: 1

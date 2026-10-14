@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: PkKemis classroom
-  version: 0.8.0
+  version: 0.8.1
   summary: Lớp học, suất học, học sinh, bài giáo viên soạn, bài giao, làm bài và kết quả.
   description: |
     Lát A và B của M4 (docs/backend/M4-CLASSROOM.md): tạo lớp, vào lớp bằng mã, suất học và hạn dùng, mua thêm suất, gia hạn, rời lớp, xóa học sinh,
@@ -10,6 +10,9 @@ info:
     0.8.0 (docs/backend/M6-CONTENT.md): danh mục khóa và câu ngân hàng lấy từ learning (L1), câu ngân hàng được chụp vào bài lúc lưu;
     tiến độ khóa và hoạt động gần nhất của học sinh cho giáo viên (L3); lượt làm bài của lớp ở máy chủ: đề không đáp án, đáp án sau từng câu
     (bộ bài tập) hoặc sau khi nộp (đề), đồng hồ đề do máy chủ giữ, XP gửi sang learning (L6). Mỗi thao tác mới ghi lát cài nó ở `x-slice`.
+
+    0.8.1 (sửa sau soát M6, chỉ thêm): `GET /v1/works/{workId}/paper` không còn đáp án với học sinh; nộp một lần cũng bị giới hạn lượt của lớp
+    dùng thử; mã câu tự soạn do máy chủ cấp; `RunResult.xpStatus`.
 
     - Chỉ thêm, không xóa hay đổi nghĩa của trường đã phát hành.
     - Token là access token của identity (xem identity.yaml); service tự kiểm bằng khóa công khai.
@@ -234,7 +237,7 @@ paths:
       operationId: createWork
       summary: Soạn một bộ bài tập hoặc đề thi (giáo viên)
       description: |
-        Máy chủ kiểm kỹ và chỉ giữ các trường nó biết. Tối đa 40 câu; câu lấy từ ngân hàng PkKemis phải thuộc khóa của bài; câu tự soạn có mã bắt đầu bằng `tq-`
+        Máy chủ kiểm kỹ và chỉ giữ các trường nó biết. Tối đa 40 câu; câu lấy từ ngân hàng PkKemis phải thuộc khóa của bài; câu tự soạn có mã bắt đầu bằng `tq-` (từ 0.8.1 mã do máy chủ cấp: mã client gửi chỉ được giữ khi câu đã thuộc chính bài này)
         và đủ phần theo dạng (4 phương án khác nhau và phương án đúng; hoặc 4 ý a đến d có Đúng/Sai; hoặc đáp án số tối đa 4 kí tự, dấu phẩy thập phân).
         Đề thi cần thời gian (5 đến 180 phút) và điểm đạt (0 đến 100, tức thang 10 nhân 10); bộ bài tập thì không.
         Từ 0.8.0 (L1): câu ngân hàng được kiểm với learning (có thật, thuộc khóa của bài, chưa nghỉ) và **chụp nguyên câu kèm đáp án vào bài**
@@ -610,6 +613,9 @@ paths:
         Chỉ học sinh của một lớp còn chạy (không tạm khóa) đã được giao bài này; khác đi là 404 (không phải bài giao cho mình) hoặc 409 `class_expired`
         (mọi lớp được giao đều đã hết hạn). Đề kèm đáp án để màn hình luyện tập chấm ngay từng câu; **máy chủ không tin điểm máy khách tính**, chỉ lưu điểm
         nó tự chấm lại từ câu trả lời gửi lên. Giới hạn đáp án lộ ra trình duyệt: xem docs/backend/M4-CLASSROOM.md.
+
+        **Từ 0.8.1:** học sinh nhận câu như `sheet` (không `answerIndex`, `answer`, `explanation`, `statements[].answer`); đáp án chỉ đến
+        qua `/runs`. Giáo viên và admin của lớp vẫn nhận đủ đáp án.
 
         **Bỏ từ 0.8.0** (L6): trả đáp án cho học sinh. Dùng `GET /v1/works/{workId}/sheet` và `/v1/works/{workId}/runs`. Web thôi gọi ở L6;
         gỡ hẳn khi chủ dự án đồng ý (docs/backend/M6-CONTENT.md, câu hỏi 8). Không bao giờ mở ra ngoài mạng nội bộ.
@@ -1595,3 +1601,9 @@ components:
               description: XP learning đã cộng cho lượt này; null khi learning chưa xác nhận (sẽ cộng sau). 0 với lần làm lại.
             firstAttempt: { type: boolean }
             xpCapped: { type: boolean, description: XP bị cắt vì đã chạm trần mỗi ngày của bài lớp. }
+            xpStatus:
+              type: string
+              enum: [confirmed, pending, none, failed]
+              description: |
+                Từ 0.8.1. `confirmed` learning đã trả lời; `pending` chưa xác nhận, `xp` là null và sẽ cộng sau; `none` không có XP để cộng
+                (lần làm lại, hoặc không có learning); `failed` learning từ chối hẳn kết quả này, sẽ không cộng: `xp` là 0 (không để null mãi).

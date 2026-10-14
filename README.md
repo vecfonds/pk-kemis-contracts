@@ -7,8 +7,8 @@ Hợp đồng giữa các service của PkKemis và nguồn sự thật cho API.
 | File | Service | Trạng thái |
 |---|---|---|
 | `openapi/identity.yaml` | identity | 0.4.0 đã cài (M1, M2, thao tác admin, nhật ký); 0.5.0 viết cho M6 lát L7 (ẩn khỏi bảng xếp hạng), chưa cài |
-| `openapi/learning.yaml` | learning | 0.2.0 đã cài và đối chiếu bằng `test/contract.spec.ts` ở learning (M3); 0.3.0 viết cho M6 (nội dung, giấu đáp án, tiến độ, sổ tay lỗi sai, xếp hạng, API nội bộ), cài dần theo lát |
-| `openapi/classroom.yaml` | classroom | 0.7.0 đã cài (M4 lát A–D), đối chiếu bằng `test/contract.spec.ts` ở classroom; 0.8.0 viết cho M6 (danh mục từ learning, tiến độ học sinh, lượt làm bài của lớp ở máy chủ), cài dần theo lát |
+| `openapi/learning.yaml` | learning | (0.3.1 sửa sau soát M6) 0.2.0 đã cài và đối chiếu bằng `test/contract.spec.ts` ở learning (M3); 0.3.0 viết cho M6 (nội dung, giấu đáp án, tiến độ, sổ tay lỗi sai, xếp hạng, API nội bộ), cài dần theo lát |
+| `openapi/classroom.yaml` | classroom | (0.8.1 sửa sau soát M6) 0.7.0 đã cài (M4 lát A–D), đối chiếu bằng `test/contract.spec.ts` ở classroom; 0.8.0 viết cho M6 (danh mục từ learning, tiến độ học sinh, lượt làm bài của lớp ở máy chủ), cài dần theo lát |
 
 Kế hoạch M6 và thứ tự các lát: `../pk-kemis-web/docs/backend/M6-CONTENT.md`.
 
