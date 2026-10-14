@@ -1290,7 +1290,7 @@ components:
     PaperQuestion:
       description: Một câu của đề (từ ngân hàng PkKemis hoặc giáo viên tự soạn), kèm đáp án.
       type: object
-      required: [id, type, chapterId, topic, level, prompt, explanation]
+      required: [id, type, chapterId, topic, level, prompt]
       properties:
         id: { type: string }
         type: { type: string, enum: [single, truefalse, short] }
@@ -1300,7 +1300,7 @@ components:
         level: { type: string, enum: [biet, hieu, vandung] }
         prompt: { type: string }
         hint: { type: string }
-        explanation: { type: string }
+        explanation: { type: string, description: "Vắng khi người nhận là học sinh (0.8.1)." }
         tool:
           type: object
           required: [href, label]
@@ -1313,12 +1313,12 @@ components:
           type: array
           items:
             type: object
-            required: [text, answer, explanation]
+            required: [text]
             properties:
               text: { type: string }
-              answer: { type: boolean }
-              explanation: { type: string }
-        answer: { type: string }
+              answer: { type: boolean, description: "Vắng khi người nhận là học sinh (0.8.1)." }
+              explanation: { type: string, description: "Vắng khi người nhận là học sinh (0.8.1)." }
+        answer: { type: string, description: "Vắng khi người nhận là học sinh (0.8.1)." }
 
     QuestionAnswer:
       description: Câu trả lời của học sinh; `null` ở một ý Đúng/Sai nghĩa là bỏ trống.

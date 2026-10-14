@@ -158,7 +158,7 @@ paths:
       summary: Bắt đầu làm một bộ bài tập hoặc đề thi, hoặc làm tiếp lượt đang mở
       description: |
         Mỗi học sinh chỉ có một lượt đang mở cho mỗi bộ hoặc đề: gọi lại thì trả lượt đó (200), đồng hồ không bắt đầu lại.
-        Tối đa 5 lượt đã nộp cho mỗi bộ hoặc đề. Đề thi bỏ dở quá giờ được chấm ngay khi học sinh bắt đầu lại và tính là một lượt.
+        Tối đa 5 lượt đã nộp cho mỗi bộ hoặc đề. Đề thi bỏ dở quá giờ được chấm ngay khi học sinh bắt đầu lại và tính là một lượt; từ 0.3.1 kể cả khi chưa lưu câu nào (nộp 0 điểm, tính là lượt đầu nên mất XP lượt đầu của đề đó; các lượt sau vẫn làm được nhưng không có XP lượt đầu).
         Đề chưa đến giờ mở trả 409 `exam_not_open`.
 
         Từ 0.3.0:
@@ -339,7 +339,7 @@ paths:
         - `lesson`: mỗi câu chưa từng được trả lời trước lượt này được làm tròn(phần đúng × 10) XP; thêm 20 khi mọi câu của lượt đều mới
           và đã trả lời đủ.
         - `quick`: mỗi câu chưa từng được trả lời được làm tròn(phần đúng × 10) XP; không có thưởng.
-        - `review` chế độ `due`: 5 XP mỗi câu đúng, thêm 10 cho mỗi câu thành "đã nhớ" (`remembered`); chế độ `all`: 0 XP, lịch ôn giữ nguyên.
+        - `review` chế độ `due`: 5 XP mỗi câu đúng, thêm 10 cho mỗi câu thành "đã nhớ" (`remembered`); chế độ `all`: 0 XP, lịch ôn giữ nguyên. Từ 0.3.1 XP ôn `due` có trần 100 mỗi ngày (giờ Việt Nam, cộng mọi lượt ôn trong ngày): câu vượt trần vẫn được chấm và dời lịch ôn như thường, chỉ XP phần vượt là 0 (`xp` của câu và của lượt đã tính trần).
         Đề thi (L4): câu đã trả lời ít nhất một phần mà chưa đúng hoàn toàn được ghi vào sổ tay lỗi sai (L5); câu bỏ trống không ghi.
       parameters:
         - { $ref: "#/components/parameters/AttemptId" }
