@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: PkKemis identity
-  version: 0.6.0
+  version: 0.7.0
   summary: Tài khoản, đăng nhập, token và vai trò.
   description: |
     Đã được chủ dự án duyệt ngày 13/10/2026 (docs/backend/M1-IDENTITY.md).
@@ -13,6 +13,10 @@ info:
     riêng `last_admin` khi hạ hoặc khóa quản trị viên cuối cùng (trước là `forbidden`, cùng status 403; lát 7c).
     Thư (đặt lại mật khẩu, xác minh) đi qua bộ gửi đang bật: Resend khi có `RESEND_API_KEY`, SMTP khi có `MAIL_SMTP_HOST` (Mailpit khi chạy
     trên máy, thư không ra ngoài), không có thì không gửi và log không chứa liên kết. Chưa có thao tác nào ở đây cho biết thư đã đi hay chưa.
+
+    0.7.0 (docs/backend/M8-EVENTS.md, chỉ thêm, lát 8d): `UserSummary.version` (phiên bản hồ sơ công khai). Từ bản này identity phát sự kiện
+    `user.*` lên Kafka (`asyncapi/pkkemis.yaml` 0.1.0) mỗi khi đăng ký, đổi tên hoặc ảnh (`PATCH /v1/me`), đổi quyền riêng tư
+    (`PATCH /v1/me/privacy`), đổi vai trò, khóa, mở khóa (`/v1/admin/users/**`). Không thao tác REST nào đổi hành vi hay phản hồi.
 
     - Chỉ thêm, không xóa hay đổi nghĩa của trường đã phát hành.
     - Từ 0.3.0 các thao tác admin (`/v1/admin/*`) đã được cài (lát D của M4); `x-phase: 2` còn lại, nếu có, là thao tác chưa cài.
@@ -469,7 +473,10 @@ paths:
       tags: [internal]
       operationId: getUsersBatch
       summary: Tên và vai trò của nhiều người cùng lúc
-      description: Chỉ service gọi nhau. Mã không tồn tại thì bị bỏ qua trong kết quả, không báo lỗi.
+      description: |
+        Chỉ service gọi nhau. Mã không tồn tại thì bị bỏ qua trong kết quả, không báo lỗi.
+        Từ 0.7.0 (lát 8d) mỗi người có `version`, cùng số với `data.user.version` của sự kiện `user.*`: bên giữ bản sao (bảng `people` của
+        learning) ghi kết quả này chỉ khi `version` ≥ bản đang có, để một phản hồi đọc trước một thay đổi không đè lên sự kiện của thay đổi đó.
       security:
         - internalKey: []
       requestBody:
@@ -609,6 +616,15 @@ components:
         hideFromLeaderboard:
           type: boolean
           description: "0.5.0 (L7): người dùng đã bật ẩn khỏi bảng xếp hạng. Vắng như false."
+        version:
+          type: integer
+          format: int64
+          minimum: 0
+          x-slice: 8d
+          description: |
+            0.7.0 (M8, lát 8d): phiên bản hồ sơ công khai (tên, ảnh, vai trò, khóa, cờ ẩn), tăng đúng 1 mỗi lần một trong các trường đó đổi;
+            tài khoản có trước M8 bắt đầu từ 0, tài khoản mới là 1. Bằng `data.user.version` của sự kiện `user.*`. Vắng (identity cũ hơn
+            0.7.0) thì bên gọi coi như không biết phiên bản và ghi như trước.
 
     PrivacySettings:
       type: object

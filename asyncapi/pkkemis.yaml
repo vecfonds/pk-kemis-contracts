@@ -1,0 +1,741 @@
+asyncapi: 3.0.0
+info:
+  title: PkKemis — sự kiện giữa các service
+  version: 0.1.0
+  description: |
+    Hợp đồng sự kiện trên Kafka của PkKemis (docs/backend/M8-EVENTS.md). Cùng quy tắc với OpenAPI: **chỉ thêm, không xóa hay đổi nghĩa**.
+
+    0.1.0 (M8, nền sự kiện): identity phát sáu sự kiện tài khoản (`user.*`) để learning làm mới bản sao tên, ảnh, vai trò, khóa, cờ ẩn
+    (bảng `people`) ngay thay vì chờ hết hạn 10 phút; learning phát `xp.awarded` cho mọi lần cộng XP (M9 commerce mới nghe). Thao tác
+    và tin nhắn ghi lát cài nó ở `x-slice` (`8d` identity, `8e` learning). `POST /internal/class-work-results` (REST + outbox của M6 L6) giữ
+    nguyên, không chuyển sang sự kiện.
+
+    **Phong bì:** mọi tin là một CloudEvent 1.0 dạng structured (cả phong bì là giá trị của bản ghi Kafka, JSON UTF-8), header
+    `content-type: application/cloudevents+json; charset=UTF-8`. Khóa bản ghi là `subject` (mã người dùng), nên sự kiện của cùng một người
+    vào cùng partition và đến đúng thứ tự phát.
+
+    **Giao ít nhất một lần:** bên nghe có thể nhận một sự kiện hai lần (tiến trình đẩy outbox chết sau khi gửi, bên nghe chết trước khi
+    ghi nhận). Bên nghe chống trùng theo `id` (bảng `processed_events`), và với bản sao trạng thái thì so `data.user.version`.
+
+    **Quy tắc tiến hóa:**
+    - Chỉ thêm: thêm trường vào `data`, thêm giá trị vào enum, thêm loại sự kiện, thêm topic. Mọi thứ thêm vào hợp đồng trước, rồi bên phát
+      mới được gửi (schema `data` đặt `additionalProperties: false` để test hợp đồng của bên phát bắt được trường lạ, ví dụ email lỡ lọt vào).
+    - Bên nghe khoan dung: bỏ qua trường lạ, bỏ qua `type` lạ trên topic (không lỗi, không DLQ); gặp giá trị enum lạ thì bỏ qua sự kiện đó
+      và ghi log cảnh báo. Bên nghe không kiểm schema chặt lúc chạy; test hợp đồng kiểm bên phát.
+    - Thay đổi phá vỡ: loại mới `<tên>.v2` phát song song với loại cũ cho tới khi mọi bên nghe chuyển xong; cần chủ dự án đồng ý.
+
+    **Không bao giờ có trong sự kiện:** email, ngày sinh, mật khẩu hay mã băm, token, địa chỉ IP, lý do khóa của admin, câu trả lời hay
+    đáp án. Tên gọi theo chế độ hiển thị (XP ↔ Tu Vi…) không có ở đây: sự kiện chỉ chứa mã và số (AGENTS.md mục 2.1).
+  tags:
+    - name: identity
+      description: Tài khoản, vai trò, khóa, quyền riêng tư
+    - name: learning
+      description: Sổ cái XP
+
+defaultContentType: application/cloudevents+json
+
+servers:
+  local:
+    host: kafka:9092
+    protocol: kafka
+    protocolVersion: "4.3"
+    description: |
+      Kafka trên máy này (Docker Compose): Apache Kafka 4.3, chế độ KRaft, một broker (pk-kemis-platform `compose.yml`). PLAINTEXT, chỉ trong mạng Compose, không mở cổng ra ngoài
+      máy. Tắt tự tạo topic (`auto.create.topics.enable=false`): topic do platform tạo lúc khởi động với cấu hình ở từng kênh dưới đây.
+
+channels:
+  identityEvents:
+    address: identity.events
+    title: Sự kiện của identity
+    description: |
+      Chỉ identity ghi. Khóa = mã người dùng. Mọi sự kiện `user.*` mang ảnh chụp hồ sơ công khai (`data.user`) sau thay đổi, nên bên giữ bản
+      sao chỉ cần một cách xử lý cho cả sáu loại: ghi `data.user` khi `version` mới lớn hơn hoặc bằng bản đang có.
+    messages:
+      userRegistered: { $ref: "#/components/messages/UserRegistered" }
+      userProfileUpdated: { $ref: "#/components/messages/UserProfileUpdated" }
+      userRoleChanged: { $ref: "#/components/messages/UserRoleChanged" }
+      userLocked: { $ref: "#/components/messages/UserLocked" }
+      userUnlocked: { $ref: "#/components/messages/UserUnlocked" }
+      userPrivacyUpdated: { $ref: "#/components/messages/UserPrivacyUpdated" }
+    bindings:
+      kafka:
+        topic: identity.events
+        partitions: 3
+        replicas: 1
+        topicConfiguration:
+          cleanup.policy: [delete]
+          retention.ms: 604800000
+        bindingVersion: "0.5.0"
+
+  identityEventsDlq:
+    address: identity.events.dlq
+    title: Sự kiện của identity mà một bên nghe bỏ cuộc
+    description: |
+      Bên nghe `identity.events` ghi vào đây khi một bản ghi không đọc được hoặc xử lý hỏng sau mọi lần thử lại (M8-EVENTS.md mục 5.4).
+      Dùng chung cho mọi nhóm đọc; header `pk-dlq-group` cho biết của ai. Người xem và gửi lại bằng tay (Kafka UI,
+      `pk-kemis-platform/scripts/kafka-dlq.sh`); không service nào tự đọc topic này. Giữ 30 ngày.
+    messages:
+      deadLetter: { $ref: "#/components/messages/DeadLetter" }
+    bindings:
+      kafka:
+        topic: identity.events.dlq
+        partitions: 1
+        replicas: 1
+        topicConfiguration:
+          cleanup.policy: [delete]
+          retention.ms: 2592000000
+        bindingVersion: "0.5.0"
+
+  learningEvents:
+    address: learning.events
+    title: Sự kiện của learning
+    description: Chỉ learning ghi. Khóa = mã người dùng. 0.1.0 chỉ có `xp.awarded`; chưa ai nghe cho tới M9 (commerce đổi XP ra Xu).
+    messages:
+      xpAwarded: { $ref: "#/components/messages/XpAwarded" }
+    bindings:
+      kafka:
+        topic: learning.events
+        partitions: 3
+        replicas: 1
+        topicConfiguration:
+          cleanup.policy: [delete]
+          retention.ms: 604800000
+        bindingVersion: "0.5.0"
+
+  learningEventsDlq:
+    address: learning.events.dlq
+    title: Sự kiện của learning mà một bên nghe bỏ cuộc
+    description: Như `identity.events.dlq`. Tạo sẵn ở M8 cho đồng bộ; có người ghi từ M9 (commerce).
+    messages:
+      deadLetter: { $ref: "#/components/messages/DeadLetter" }
+    bindings:
+      kafka:
+        topic: learning.events.dlq
+        partitions: 1
+        replicas: 1
+        topicConfiguration:
+          cleanup.policy: [delete]
+          retention.ms: 2592000000
+        bindingVersion: "0.5.0"
+
+operations:
+  identityPublishesUserEvents:
+    action: send
+    channel: { $ref: "#/channels/identityEvents" }
+    title: identity phát sự kiện tài khoản
+    description: |
+      Ghi vào bảng `outbox` trong cùng giao dịch với thay đổi, tiến trình đẩy gửi lên Kafka theo thứ tự `outbox.id`. Mọi thao tác phát `user.*`
+      khóa dòng người dùng trước khi đổi và tăng `version` đúng một lần, nên thứ tự `outbox.id` của cùng một người trùng thứ tự ghi.
+      Thao tác không đổi gì (khóa người đã khóa, đổi sang đúng vai trò cũ, PATCH chỉ đổi ngày sinh) không phát sự kiện.
+    messages:
+      - $ref: "#/channels/identityEvents/messages/userRegistered"
+      - $ref: "#/channels/identityEvents/messages/userProfileUpdated"
+      - $ref: "#/channels/identityEvents/messages/userRoleChanged"
+      - $ref: "#/channels/identityEvents/messages/userLocked"
+      - $ref: "#/channels/identityEvents/messages/userUnlocked"
+      - $ref: "#/channels/identityEvents/messages/userPrivacyUpdated"
+    bindings:
+      kafka:
+        clientId: { type: string, const: identity }
+        bindingVersion: "0.5.0"
+    x-service: identity
+    x-slice: 8d
+
+  learningReceivesUserEvents:
+    action: receive
+    channel: { $ref: "#/channels/identityEvents" }
+    title: learning làm mới bảng people
+    description: |
+      Nhóm đọc `learning`, bắt đầu từ đầu topic khi nhóm chưa có vị trí. Mỗi sự kiện: một giao dịch ghi `processed_events` (chống trùng) và
+      upsert `people` khi `data.user.version` ≥ `people.version`. Đệm 10 phút và `POST /internal/users/batch` của identity vẫn chạy làm dự phòng
+      (Kafka tắt, sự kiện mất, người có trước M8).
+    messages:
+      - $ref: "#/channels/identityEvents/messages/userRegistered"
+      - $ref: "#/channels/identityEvents/messages/userProfileUpdated"
+      - $ref: "#/channels/identityEvents/messages/userRoleChanged"
+      - $ref: "#/channels/identityEvents/messages/userLocked"
+      - $ref: "#/channels/identityEvents/messages/userUnlocked"
+      - $ref: "#/channels/identityEvents/messages/userPrivacyUpdated"
+    bindings:
+      kafka:
+        groupId: { type: string, const: learning }
+        clientId: { type: string, const: learning }
+        bindingVersion: "0.5.0"
+    x-service: learning
+    x-slice: 8e
+
+  learningDeadLettersUserEvents:
+    action: send
+    channel: { $ref: "#/channels/identityEventsDlq" }
+    title: learning bỏ cuộc một sự kiện của identity
+    messages:
+      - $ref: "#/channels/identityEventsDlq/messages/deadLetter"
+    bindings:
+      kafka:
+        clientId: { type: string, const: learning }
+        bindingVersion: "0.5.0"
+    x-service: learning
+    x-slice: 8e
+
+  learningPublishesXpEvents:
+    action: send
+    channel: { $ref: "#/channels/learningEvents" }
+    title: learning phát mỗi lần cộng XP
+    description: |
+      Một sự kiện cho mỗi dòng `xp_events`, ghi outbox cùng giao dịch với dòng đó (bài học, lượt làm bài, ôn tập, bài của lớp, và tự nộp đề quá
+      hạn). `id` của sự kiện bằng `data.awardId` bằng `xp_events.id`. XP có trước khi lát 8e chạy không có sự kiện.
+    messages:
+      - $ref: "#/channels/learningEvents/messages/xpAwarded"
+    bindings:
+      kafka:
+        clientId: { type: string, const: learning }
+        bindingVersion: "0.5.0"
+    x-service: learning
+    x-slice: 8e
+
+components:
+  messages:
+    UserRegistered:
+      name: user.registered
+      title: Tài khoản mới
+      summary: Một người vừa đăng ký (học sinh hoặc giáo viên). Admin không tự đăng ký nên không có sự kiện này cho admin.
+      contentType: application/cloudevents+json
+      headers: { $ref: "#/components/schemas/EventHeaders" }
+      payload: { $ref: "#/components/schemas/UserRegisteredEvent" }
+      bindings:
+        kafka:
+          key: { $ref: "#/components/schemas/UserKey" }
+          bindingVersion: "0.5.0"
+      x-producer: identity
+      x-consumers: [learning]
+      x-slice: 8d
+      examples:
+        - name: hocSinhMoi
+          summary: Học sinh mới đăng ký
+          headers:
+            content-type: application/cloudevents+json; charset=UTF-8
+          payload:
+            specversion: "1.0"
+            id: 0199ee21-6a40-7b3c-8d15-2f4a9c7e1b01
+            source: /identity
+            type: user.registered
+            time: "2026-10-16T08:15:30.120Z"
+            subject: 3f1c9a52-7b1e-4d8a-9c41-0e5b2d7f6a10
+            datacontenttype: application/json
+            data:
+              user:
+                userId: 3f1c9a52-7b1e-4d8a-9c41-0e5b2d7f6a10
+                fullName: Nguyễn Minh Anh
+                avatarUrl: null
+                role: student
+                locked: false
+                hideFromLeaderboard: false
+                version: 1
+
+    UserProfileUpdated:
+      name: user.profile_updated
+      title: Tên hoặc ảnh đại diện đổi
+      summary: Người dùng đổi họ tên hoặc ảnh đại diện (`PATCH /v1/me`). Chỉ đổi ngày sinh thì không phát (ngày sinh không có trong sự kiện).
+      contentType: application/cloudevents+json
+      headers: { $ref: "#/components/schemas/EventHeaders" }
+      payload: { $ref: "#/components/schemas/UserProfileUpdatedEvent" }
+      bindings:
+        kafka:
+          key: { $ref: "#/components/schemas/UserKey" }
+          bindingVersion: "0.5.0"
+      x-producer: identity
+      x-consumers: [learning]
+      x-slice: 8d
+      examples:
+        - name: doiTen
+          summary: Học sinh đổi tên ở Cài đặt
+          headers:
+            content-type: application/cloudevents+json; charset=UTF-8
+          payload:
+            specversion: "1.0"
+            id: 0199ee2b-1f07-7d52-a3e8-6c0b5d9f2a02
+            source: /identity
+            type: user.profile_updated
+            time: "2026-10-16T08:20:02.481Z"
+            subject: 3f1c9a52-7b1e-4d8a-9c41-0e5b2d7f6a10
+            datacontenttype: application/json
+            data:
+              user:
+                userId: 3f1c9a52-7b1e-4d8a-9c41-0e5b2d7f6a10
+                fullName: Nguyễn Minh Ánh
+                avatarUrl: null
+                role: student
+                locked: false
+                hideFromLeaderboard: false
+                version: 2
+              changed: [fullName]
+
+    UserRoleChanged:
+      name: user.role_changed
+      title: Vai trò đổi
+      summary: Admin đổi vai trò (kể cả thu vai trò giáo viên). `data.user.role` là vai trò mới, `previousRole` là vai trò cũ.
+      contentType: application/cloudevents+json
+      headers: { $ref: "#/components/schemas/EventHeaders" }
+      payload: { $ref: "#/components/schemas/UserRoleChangedEvent" }
+      bindings:
+        kafka:
+          key: { $ref: "#/components/schemas/UserKey" }
+          bindingVersion: "0.5.0"
+      x-producer: identity
+      x-consumers: [learning]
+      x-slice: 8d
+      examples:
+        - name: thuVaiTroGiaoVien
+          summary: Admin chuyển một giáo viên về học sinh
+          headers:
+            content-type: application/cloudevents+json; charset=UTF-8
+          payload:
+            specversion: "1.0"
+            id: 0199ee30-8c11-7a90-b4d2-91e3f0a6c703
+            source: /identity
+            type: user.role_changed
+            time: "2026-10-16T09:01:44.007Z"
+            subject: 8b2e4f10-3c5d-4e6f-a7b8-c9d0e1f2a3b4
+            datacontenttype: application/json
+            data:
+              user:
+                userId: 8b2e4f10-3c5d-4e6f-a7b8-c9d0e1f2a3b4
+                fullName: Trần Thu Hà
+                avatarUrl: null
+                role: student
+                locked: false
+                hideFromLeaderboard: false
+                version: 4
+              previousRole: teacher
+
+    UserLocked:
+      name: user.locked
+      title: Tài khoản bị khóa
+      summary: Admin khóa tài khoản. Không có lý do khóa (chỉ ở nhật ký của identity).
+      contentType: application/cloudevents+json
+      headers: { $ref: "#/components/schemas/EventHeaders" }
+      payload: { $ref: "#/components/schemas/UserLockedEvent" }
+      bindings:
+        kafka:
+          key: { $ref: "#/components/schemas/UserKey" }
+          bindingVersion: "0.5.0"
+      x-producer: identity
+      x-consumers: [learning]
+      x-slice: 8d
+      examples:
+        - name: khoa
+          summary: Admin khóa một học sinh
+          headers:
+            content-type: application/cloudevents+json; charset=UTF-8
+          payload:
+            specversion: "1.0"
+            id: 0199ee35-2d9a-7e41-8f60-5a7b3c1d9e04
+            source: /identity
+            type: user.locked
+            time: "2026-10-16T09:30:00.000Z"
+            subject: 3f1c9a52-7b1e-4d8a-9c41-0e5b2d7f6a10
+            datacontenttype: application/json
+            data:
+              user:
+                userId: 3f1c9a52-7b1e-4d8a-9c41-0e5b2d7f6a10
+                fullName: Nguyễn Minh Ánh
+                avatarUrl: null
+                role: student
+                locked: true
+                hideFromLeaderboard: false
+                version: 3
+
+    UserUnlocked:
+      name: user.unlocked
+      title: Tài khoản được mở khóa
+      summary: Admin mở khóa tài khoản.
+      contentType: application/cloudevents+json
+      headers: { $ref: "#/components/schemas/EventHeaders" }
+      payload: { $ref: "#/components/schemas/UserUnlockedEvent" }
+      bindings:
+        kafka:
+          key: { $ref: "#/components/schemas/UserKey" }
+          bindingVersion: "0.5.0"
+      x-producer: identity
+      x-consumers: [learning]
+      x-slice: 8d
+      examples:
+        - name: moKhoa
+          summary: Admin mở khóa
+          headers:
+            content-type: application/cloudevents+json; charset=UTF-8
+          payload:
+            specversion: "1.0"
+            id: 0199ee3a-77c4-7f13-9b26-0d8e4a2c6f05
+            source: /identity
+            type: user.unlocked
+            time: "2026-10-16T10:05:12.340Z"
+            subject: 3f1c9a52-7b1e-4d8a-9c41-0e5b2d7f6a10
+            datacontenttype: application/json
+            data:
+              user:
+                userId: 3f1c9a52-7b1e-4d8a-9c41-0e5b2d7f6a10
+                fullName: Nguyễn Minh Ánh
+                avatarUrl: null
+                role: student
+                locked: false
+                hideFromLeaderboard: false
+                version: 4
+
+    UserPrivacyUpdated:
+      name: user.privacy_updated
+      title: Quyền riêng tư đổi
+      summary: Người dùng đổi quyền riêng tư (`PATCH /v1/me/privacy`). 0.1.0 chỉ có cờ ẩn khỏi bảng xếp hạng; các quyền khác thêm ở M10.
+      contentType: application/cloudevents+json
+      headers: { $ref: "#/components/schemas/EventHeaders" }
+      payload: { $ref: "#/components/schemas/UserPrivacyUpdatedEvent" }
+      bindings:
+        kafka:
+          key: { $ref: "#/components/schemas/UserKey" }
+          bindingVersion: "0.5.0"
+      x-producer: identity
+      x-consumers: [learning]
+      x-slice: 8d
+      examples:
+        - name: anKhoiBangXepHang
+          summary: Học sinh bật "Ẩn khỏi bảng xếp hạng"
+          headers:
+            content-type: application/cloudevents+json; charset=UTF-8
+          payload:
+            specversion: "1.0"
+            id: 0199ee3f-0b5e-7c88-a1d4-3e9f6b0c2d06
+            source: /identity
+            type: user.privacy_updated
+            time: "2026-10-16T10:40:55.918Z"
+            subject: 3f1c9a52-7b1e-4d8a-9c41-0e5b2d7f6a10
+            datacontenttype: application/json
+            data:
+              user:
+                userId: 3f1c9a52-7b1e-4d8a-9c41-0e5b2d7f6a10
+                fullName: Nguyễn Minh Ánh
+                avatarUrl: null
+                role: student
+                locked: false
+                hideFromLeaderboard: true
+                version: 5
+              changed: [hideFromLeaderboard]
+
+    XpAwarded:
+      name: xp.awarded
+      title: Cộng XP
+      summary: Learning vừa ghi một dòng vào sổ cái XP (`xp_events`). Số XP là số đã cộng thật (sau trần ngày), luôn lớn hơn 0.
+      contentType: application/cloudevents+json
+      headers: { $ref: "#/components/schemas/EventHeaders" }
+      payload: { $ref: "#/components/schemas/XpAwardedEvent" }
+      bindings:
+        kafka:
+          key: { $ref: "#/components/schemas/UserKey" }
+          bindingVersion: "0.5.0"
+      x-producer: learning
+      x-consumers: []
+      x-slice: 8e
+      examples:
+        - name: hoanThanhBoBaiTap
+          summary: Lượt đầu của một bộ bài tập được 85 XP
+          headers:
+            content-type: application/cloudevents+json; charset=UTF-8
+          payload:
+            specversion: "1.0"
+            id: 6d0f1a2b-3c4d-4e5f-8a9b-0c1d2e3f4a5b
+            source: /learning
+            type: xp.awarded
+            time: "2026-10-16T11:12:09.204Z"
+            subject: 3f1c9a52-7b1e-4d8a-9c41-0e5b2d7f6a10
+            datacontenttype: application/json
+            data:
+              awardId: 6d0f1a2b-3c4d-4e5f-8a9b-0c1d2e3f4a5b
+              userId: 3f1c9a52-7b1e-4d8a-9c41-0e5b2d7f6a10
+              amount: 85
+              source: exercise
+              refId: 1b7e2c3d-4f5a-4b6c-9d7e-8f9a0b1c2d3e
+              awardedAt: "2026-10-16T11:12:09.204Z"
+        - name: baiCuaLop
+          summary: Bài của lớp, bị cắt ở trần 300 XP mỗi ngày
+          headers:
+            content-type: application/cloudevents+json; charset=UTF-8
+          payload:
+            specversion: "1.0"
+            id: 7e1a2b3c-4d5e-4f6a-9b0c-1d2e3f4a5b6c
+            source: /learning
+            type: xp.awarded
+            time: "2026-10-16T13:00:41.550Z"
+            subject: 3f1c9a52-7b1e-4d8a-9c41-0e5b2d7f6a10
+            datacontenttype: application/json
+            data:
+              awardId: 7e1a2b3c-4d5e-4f6a-9b0c-1d2e3f4a5b6c
+              userId: 3f1c9a52-7b1e-4d8a-9c41-0e5b2d7f6a10
+              amount: 20
+              source: class_work
+              refId: 5c6d7e8f-9a0b-4c1d-8e2f-3a4b5c6d7e8f
+              awardedAt: "2026-10-16T13:00:41.550Z"
+
+    DeadLetter:
+      name: dead_letter
+      title: Bản ghi bị bỏ cuộc
+      summary: Nguyên bản ghi gốc (khóa và giá trị không đổi) kèm các header `pk-dlq-*` cho biết ai bỏ cuộc và vì sao.
+      contentType: application/cloudevents+json
+      headers: { $ref: "#/components/schemas/DeadLetterHeaders" }
+      payload:
+        description: |
+          Giá trị của bản ghi gốc, không đổi một byte. Thường là một CloudEvent của topic gốc; khi `pk-dlq-reason` là `invalid_envelope`
+          thì có thể không phải JSON.
+      x-slice: 8e
+
+  schemas:
+    UserKey:
+      type: string
+      format: uuid
+      description: Khóa bản ghi Kafka = `subject` của sự kiện = mã người dùng (UUID do identity cấp), viết thường.
+
+    EventHeaders:
+      type: object
+      description: Header của bản ghi Kafka (giá trị là chuỗi UTF-8).
+      required: [content-type]
+      properties:
+        content-type:
+          type: string
+          const: application/cloudevents+json; charset=UTF-8
+        traceparent:
+          type: string
+          pattern: "^00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$"
+          description: Có thì bằng thuộc tính `traceparent` của phong bì (để công cụ truy vết đọc được mà không mở giá trị).
+
+    DeadLetterHeaders:
+      type: object
+      description: Header của bản ghi trong `<topic>.dlq`. Header gốc (nếu có) giữ nguyên, thêm các header dưới đây; mọi giá trị là chuỗi UTF-8.
+      required: [pk-dlq-group, pk-dlq-consumer, pk-dlq-reason, pk-dlq-attempts, pk-dlq-original-topic, pk-dlq-original-partition, pk-dlq-original-offset, pk-dlq-failed-at]
+      properties:
+        content-type: { type: string }
+        traceparent: { type: string }
+        pk-dlq-group: { type: string, description: "Nhóm đọc bỏ cuộc, ví dụ `learning`." }
+        pk-dlq-consumer: { type: string, description: "Bộ xử lý trong nhóm, ví dụ `learning.people`." }
+        pk-dlq-reason:
+          type: string
+          enum: [invalid_envelope, handler_failed]
+          description: |
+            `invalid_envelope`: không phải JSON, không phải CloudEvents 1.0, thiếu `id`/`type`/`subject` (không thử lại).
+            `handler_failed`: bộ xử lý vẫn lỗi sau mọi lần thử lại trong khi cơ sở dữ liệu của bên nghe vẫn trả lời.
+        pk-dlq-error: { type: string, maxLength: 1000, description: "Thông điệp lỗi cuối, không chứa giá trị của sự kiện." }
+        pk-dlq-attempts: { type: string, pattern: "^[0-9]+$", description: Số lần đã thử (số thập phân). }
+        pk-dlq-original-topic: { type: string }
+        pk-dlq-original-partition: { type: string, pattern: "^[0-9]+$" }
+        pk-dlq-original-offset: { type: string, pattern: "^[0-9]+$" }
+        pk-dlq-failed-at: { type: string, format: date-time }
+
+    CloudEventEnvelope:
+      type: object
+      description: |
+        Phong bì CloudEvents 1.0 (structured mode, JSON). Thứ tự khóa trong JSON không có nghĩa. Thuộc tính mở rộng khác ngoài `traceparent`
+        chưa dùng; thêm là bản thêm của hợp đồng.
+      additionalProperties: false
+      required: [specversion, id, source, type, time, subject, datacontenttype, data]
+      properties:
+        specversion: { type: string, const: "1.0" }
+        id:
+          type: string
+          format: uuid
+          description: |
+            Mã sự kiện, duy nhất trên mọi topic; bên nghe chống trùng theo nó. Bên phát sinh lúc ghi outbox (UUID v7 khuyên dùng để có thứ
+            tự thời gian; v4 cũng hợp lệ), gửi lại vẫn là mã đó. Riêng `xp.awarded`: bằng `data.awardId`.
+        source:
+          type: string
+          pattern: "^/[a-z]+$"
+          description: Service phát, dạng `/<service>` (`/identity`, `/learning`).
+        type:
+          type: string
+          pattern: "^[a-z_]+(\\.[a-z_0-9]+)+$"
+          description: Loại sự kiện, ví dụ `user.registered`. Không có tiền tố tên miền vì broker chỉ của PkKemis.
+        time:
+          type: string
+          format: date-time
+          description: Lúc thay đổi xảy ra ở bên phát (giờ của giao dịch ghi, UTC, có `Z`), không phải lúc gửi lên Kafka.
+        subject:
+          type: string
+          format: uuid
+          description: Mã người dùng mà sự kiện nói tới; bằng khóa bản ghi Kafka.
+        datacontenttype: { type: string, const: application/json }
+        traceparent:
+          type: string
+          pattern: "^00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$"
+          description: W3C Trace Context của yêu cầu sinh ra sự kiện (phần mở rộng distributed tracing của CloudEvents). Tùy chọn; chưa service nào có truy vết ở M8.
+        data:
+          type: object
+          description: Nội dung theo `type`, xem từng sự kiện.
+
+    Role:
+      type: string
+      enum: [student, teacher, admin]
+      description: Như `Role` của identity.yaml.
+
+    UserSnapshot:
+      type: object
+      description: |
+        Hồ sơ công khai của một người sau thay đổi, đủ để bên giữ bản sao ghi đè cả dòng. Cùng nghĩa với `UserSummary` của
+        `POST /internal/users/batch` (identity.yaml 0.7.0), cộng `version`.
+      additionalProperties: false
+      required: [userId, fullName, avatarUrl, role, locked, hideFromLeaderboard, version]
+      properties:
+        userId: { type: string, format: uuid, description: Bằng `subject`. }
+        fullName: { type: string, minLength: 1, maxLength: 80 }
+        avatarUrl: { type: [string, "null"], maxLength: 500 }
+        role: { $ref: "#/components/schemas/Role" }
+        locked: { type: boolean }
+        hideFromLeaderboard: { type: boolean }
+        version:
+          type: integer
+          format: int64
+          minimum: 0
+          description: |
+            Phiên bản hồ sơ công khai, tăng đúng 1 mỗi lần một trường của ảnh chụp này đổi (tài khoản có trước M8 bắt đầu từ 0, tài khoản mới
+            là 1 lúc đăng ký). Bên giữ bản sao chỉ ghi khi `version` ≥ bản đang có; bằng nhau là cùng nội dung. Cùng số với `version` của
+            `/internal/users/batch`, nên hai đường làm mới không ghi đè nhau bằng bản cũ.
+
+    UserRegisteredData:
+      type: object
+      additionalProperties: false
+      required: [user]
+      properties:
+        user: { $ref: "#/components/schemas/UserSnapshot" }
+
+    UserProfileUpdatedData:
+      type: object
+      additionalProperties: false
+      required: [user, changed]
+      properties:
+        user: { $ref: "#/components/schemas/UserSnapshot" }
+        changed:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: { type: string, enum: [fullName, avatarUrl] }
+          description: Trường nào đổi trong lần này.
+
+    UserRoleChangedData:
+      type: object
+      additionalProperties: false
+      required: [user, previousRole]
+      properties:
+        user: { $ref: "#/components/schemas/UserSnapshot" }
+        previousRole: { $ref: "#/components/schemas/Role" }
+
+    UserLockedData:
+      type: object
+      additionalProperties: false
+      required: [user]
+      properties:
+        user: { $ref: "#/components/schemas/UserSnapshot" }
+
+    UserUnlockedData:
+      type: object
+      additionalProperties: false
+      required: [user]
+      properties:
+        user: { $ref: "#/components/schemas/UserSnapshot" }
+
+    UserPrivacyUpdatedData:
+      type: object
+      additionalProperties: false
+      required: [user, changed]
+      properties:
+        user: { $ref: "#/components/schemas/UserSnapshot" }
+        changed:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: { type: string, enum: [hideFromLeaderboard] }
+          description: Quyền nào đổi. M10 thêm `progress`, `achievements`, `friends`, `requestsFrom`, `messagesFrom`, `repliesFrom`, `challengesFrom`.
+
+    XpSource:
+      type: string
+      enum: [exercise, exam, lesson, lesson_practice, quick, review, class_work]
+      description: |
+        Nguồn XP, bằng `xp_events.source`: `exercise` bộ bài tập, `exam` đề, `lesson` hoàn thành bài học (+50), `lesson_practice` Luyện tập
+        nhanh của bài, `quick` luyện nhanh, `review` ôn sổ lỗi sai, `class_work` bài của lớp (classroom gửi qua `/internal/class-work-results`).
+        Sau này thêm `arena`, `community` (bản thêm). Bên nghe gặp giá trị lạ thì bỏ qua sự kiện và ghi log (commerce không đổi XP lạ ra Xu).
+
+    XpAwardedData:
+      type: object
+      additionalProperties: false
+      required: [awardId, userId, amount, source, refId, awardedAt]
+      properties:
+        awardId:
+          type: string
+          format: uuid
+          description: Mã dòng `xp_events`, bằng `id` của sự kiện. Commerce (M9) chống cộng Xu hai lần theo mã này (`source_ref = xp:<awardId>`).
+        userId: { type: string, format: uuid, description: Bằng `subject`. }
+        amount: { type: integer, minimum: 1, description: Số XP đã cộng (sau trần ngày). }
+        source: { $ref: "#/components/schemas/XpSource" }
+        refId:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: Thứ đem lại XP, bằng `xp_events.ref_id` (mã lượt làm của learning, mã bài học, mã lượt làm bài lớp của classroom).
+        awardedAt: { type: string, format: date-time, description: Bằng `xp_events.created_at` và `time` của phong bì. }
+
+    UserRegisteredEvent:
+      allOf:
+        - $ref: "#/components/schemas/CloudEventEnvelope"
+        - type: object
+          properties:
+            type: { const: user.registered }
+            source: { const: /identity }
+            data: { $ref: "#/components/schemas/UserRegisteredData" }
+
+    UserProfileUpdatedEvent:
+      allOf:
+        - $ref: "#/components/schemas/CloudEventEnvelope"
+        - type: object
+          properties:
+            type: { const: user.profile_updated }
+            source: { const: /identity }
+            data: { $ref: "#/components/schemas/UserProfileUpdatedData" }
+
+    UserRoleChangedEvent:
+      allOf:
+        - $ref: "#/components/schemas/CloudEventEnvelope"
+        - type: object
+          properties:
+            type: { const: user.role_changed }
+            source: { const: /identity }
+            data: { $ref: "#/components/schemas/UserRoleChangedData" }
+
+    UserLockedEvent:
+      allOf:
+        - $ref: "#/components/schemas/CloudEventEnvelope"
+        - type: object
+          properties:
+            type: { const: user.locked }
+            source: { const: /identity }
+            data: { $ref: "#/components/schemas/UserLockedData" }
+
+    UserUnlockedEvent:
+      allOf:
+        - $ref: "#/components/schemas/CloudEventEnvelope"
+        - type: object
+          properties:
+            type: { const: user.unlocked }
+            source: { const: /identity }
+            data: { $ref: "#/components/schemas/UserUnlockedData" }
+
+    UserPrivacyUpdatedEvent:
+      allOf:
+        - $ref: "#/components/schemas/CloudEventEnvelope"
+        - type: object
+          properties:
+            type: { const: user.privacy_updated }
+            source: { const: /identity }
+            data: { $ref: "#/components/schemas/UserPrivacyUpdatedData" }
+
+    XpAwardedEvent:
+      allOf:
+        - $ref: "#/components/schemas/CloudEventEnvelope"
+        - type: object
+          properties:
+            type: { const: xp.awarded }
+            source: { const: /learning }
+            data: { $ref: "#/components/schemas/XpAwardedData" }
