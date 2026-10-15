@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: PkKemis classroom
-  version: 1.0.0
+  version: 1.1.0
   summary: Lớp học, suất học, học sinh, bài giáo viên soạn, bài giao, làm bài và kết quả.
   description: |
     Lát A và B của M4 (docs/backend/M4-CLASSROOM.md): tạo lớp, vào lớp bằng mã, suất học và hạn dùng, mua thêm suất, gia hạn, rời lớp, xóa học sinh,
@@ -18,6 +18,12 @@ info:
     hai đường đã đánh dấu bỏ từ 0.8.0, `GET /v1/works/{workId}/paper` và `POST /v1/works/{workId}/attempts` (cùng schema `WorkPaper`); học
     sinh làm bài của lớp chỉ qua `sheet`, `runs`, `/v1/runs/**`. Chỉ web gọi service này và web đã thôi dùng hai đường đó từ L6. Thêm (lát 7c):
     `GET /v1/classes/overview`, mọi lớp của giáo viên (hoặc admin) kèm chi tiết và bài nộp trong một lời gọi.
+
+    1.1.0 (docs/backend/M9-COMMERCE.md, lát 9d, chỉ thêm): học sinh hết lượt ở lớp dùng thử **mua thêm lượt bằng Xu**. classroom giữ quyền
+    lượt đã mua (`attempt_grants`) và luật giới hạn; commerce giữ ví và giá (`POST /internal/wallet/charges` của commerce.yaml), classroom
+    không bao giờ thấy số dư. Thêm `POST /v1/works/{workId}/extra-attempts`, `GET /v1/works/{workId}/extra-attempts/{grantId}`;
+    `attemptsBought`, `canBuyAttempt`, `pendingAttemptGrantId` ở `WorkSheet`; `attemptsBought` ở `WorkRun` và kết quả. `attemptLimit` giữ
+    nghĩa "số lần tối đa của học sinh này ở bài này", nay là 5 cộng số lượt đã mua (vẫn null khi không giới hạn).
 
     - Từ 1.0.0 lại chỉ thêm, không xóa hay đổi nghĩa của trường đã phát hành.
     - Token là access token của identity (xem identity.yaml); service tự kiểm bằng khóa công khai.
@@ -728,7 +734,8 @@ paths:
       description: |
         Mỗi học sinh một lượt đang mở cho mỗi bài: gọi lại thì trả lượt đó (200), đồng hồ không bắt đầu lại. Quyền như `sheet`. Số lần: lớp
         dùng thử tối đa 5 lần **đã nộp** mỗi bài (409 `attempt_limit_reached` khi bắt đầu lượt mới, và kiểm lại lúc nộp), có lớp đã mua suất
-        thì không giới hạn; mọi lớp được giao đều tạm khóa thì 409 `class_expired`.
+        thì không giới hạn; mọi lớp được giao đều tạm khóa thì 409 `class_expired`. Từ 1.1.0 giới hạn là 5 cộng số lượt đã mua
+        (`attemptsBought`, chỉ lượt `granted`); `attempt_limit_reached` kèm `canBuyAttempt` để web mở hộp "Mua thêm lượt".
         - Đề thi: `deadline` = giờ bắt đầu + thời gian đề. Lượt quá `deadline` + 15 giây được chấm từ bản nháp và **tính là một lần làm**
           (việc định kỳ mỗi phút, và khi học sinh bắt đầu lại hay mở lượt đó).
         - Đề của lượt cố định từ lúc bắt đầu (`questions`, không đáp án), kể cả khi giáo viên nhân bản hay sửa bài sau đó.
@@ -895,6 +902,102 @@ paths:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
 
+  # ------------------------------------------------------------------ 1.1.0: mua thêm lượt (M9 lát 9d)
+
+  /v1/works/{workId}/extra-attempts:
+    post:
+      tags: [submissions]
+      operationId: buyExtraAttempt
+      x-slice: 9d
+      summary: Mua thêm một lượt làm bài của lớp dùng thử bằng Xu (học sinh)
+      description: |
+        Chỉ khi giới hạn đang áp dụng (mọi lớp còn chạy được giao bài này đều là lớp dùng thử) và học sinh **đã dùng hết** lượt (`attemptsUsed`
+        ≥ `attemptLimit`); không thì 409 `no_attempt_limit` hoặc `attempts_remaining`. Mỗi lần một lượt; đang có một lần mua chưa xong cho bài
+        này (lần bấm khác, tab khác) thì 409 `purchase_in_progress` kèm `grantId` của lần đó. Quyền như `sheet`.
+
+        Luồng (giữ chỗ rồi xác nhận):
+        1. Ghi `attempt_grants` trạng thái `pending` (một giao dịch, khóa theo học sinh và bài) rồi commit.
+        2. Gọi commerce `POST /internal/wallet/charges` với `sku: class-work-attempt`, `reference: attempt:<grantId>`, `expectedAmount` (nếu
+           web gửi `expectedPrice`) và `notAfter` = lúc ghi + 2 phút; chờ tối đa 3 giây.
+        3. Thu được: lần cấp thành `granted` → 201. Commerce từ chối hẳn: `failed` → 409 với mã của commerce (`insufficient_funds` kèm
+           `required`, web mở hộp Nạp; `price_changed` kèm `price`; `charge_expired` thành `purchase_failed`). Lỗi mạng, quá giờ, 5xx: lần cấp
+           vẫn `pending` → 202; việc định kỳ của classroom gửi lại **đúng** `reference` đó (commerce không bao giờ trừ hai lần cho một
+           `reference`) tới khi có kết cục; sau `notAfter` commerce trả kết cục chắc chắn (đã thu, hoặc `charge_expired` và không bao giờ thu).
+
+        Lượt chỉ được tính khi `granted` (không có lượt nào chưa trả tiền); `pending` không cộng vào giới hạn. Gửi lại cùng `Idempotency-Key`
+        trả đúng lần cấp đó (và nếu còn `pending` thì gọi commerce lại ngay); cùng mã khác bài: 422 `idempotency_mismatch`. Lượt đã mua tính
+        trong cùng khoảng với số lần đã nộp (từ lần giao bài sớm nhất còn chạy): giáo viên giao lại bài thì số lần tính lại từ 5, lượt mua trước
+        đó không cộng thêm. Không hoàn Xu khi lớp hết hạn, học sinh rời lớp hay lớp chuyển sang trả phí. Classroom chưa nối commerce
+        (`COMMERCE_URL` trống) hay commerce trả lỗi cấu hình: 503 `commerce_unavailable`, không ghi gì.
+      parameters:
+        - { $ref: "#/components/parameters/WorkId" }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ExtraAttemptRequest" }
+      responses:
+        "201":
+          description: Đã mua; lượt có ngay
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ExtraAttemptGrant" }
+        "202":
+          description: Chưa biết kết quả (commerce chưa trả lời); hỏi lại bằng `GET …/extra-attempts/{grantId}` hoặc gửi lại cùng `Idempotency-Key`
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ExtraAttemptGrant" }
+        "400":
+          description: Dữ liệu không hợp lệ (`validation_failed`) hoặc thiếu `Idempotency-Key` (`idempotency_key_required`)
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: |
+            `insufficient_funds` (kèm `required`), `price_changed` (kèm `price`), `purchase_failed`, `attempts_remaining`, `no_attempt_limit`,
+            `purchase_in_progress` (kèm `grantId`), `class_expired`. Gửi lại cùng `Idempotency-Key` sau một kết cục từ chối trả lại đúng lỗi đó;
+            muốn thử lại (sau khi nạp) thì dùng mã mới.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422":
+          description: Cùng `Idempotency-Key` đã dùng cho bài khác (`idempotency_mismatch`)
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "503":
+          description: Chưa mua được lượt lúc này (`commerce_unavailable`), không ghi gì
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /v1/works/{workId}/extra-attempts/{grantId}:
+    get:
+      tags: [submissions]
+      operationId: getExtraAttempt
+      x-slice: 9d
+      summary: Một lần mua thêm lượt của mình (học sinh)
+      description: Để web hỏi lại khi lần mua còn `pending`. Lần mua của người khác giống như không tồn tại (404). Chỉ đọc, không gọi commerce.
+      parameters:
+        - { $ref: "#/components/parameters/WorkId" }
+        - name: grantId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Lần mua
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ExtraAttemptGrant" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
 components:
   securitySchemes:
     bearerAuth:
@@ -919,6 +1022,12 @@ components:
       in: path
       required: true
       schema: { type: string, format: uuid }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: Một mã cho mỗi lần bấm (web dùng UUID); gửi lại đúng mã khi thử lại. Phạm vi là người gọi.
+      schema: { type: string, pattern: "^[A-Za-z0-9_-]{8,100}$" }
 
   responses:
     ContentUnavailable:
@@ -990,7 +1099,20 @@ components:
             - attempt_closed
             - already_answered
             - not_available_during_exam
+            - idempotency_key_required
+            - idempotency_mismatch
+            - insufficient_funds
+            - price_changed
+            - purchase_failed
+            - attempts_remaining
+            - no_attempt_limit
+            - purchase_in_progress
+            - commerce_unavailable
         detail: { type: string, description: "Thông báo tiếng Việt, hiển thị được cho người dùng." }
+        required: { type: integer, description: "Từ 1.1.0, chỉ `insufficient_funds`: số Xu cần. Không có số dư (classroom không thấy ví)." }
+        price: { type: integer, description: "Từ 1.1.0, chỉ `price_changed`: giá hiện tại của một lượt." }
+        grantId: { type: string, format: uuid, description: "Từ 1.1.0, chỉ `purchase_in_progress`: lần mua đang chờ." }
+        canBuyAttempt: { type: boolean, description: "Từ 1.1.0, chỉ `attempt_limit_reached`: mua thêm lượt được ngay (như `WorkSheet.canBuyAttempt`)." }
         errors:
           type: array
           items:
@@ -1327,6 +1449,8 @@ components:
         attemptsUsed: { type: integer }
         attemptLimit:
           type: [integer, "null"]
+          description: Từ 1.1.0 tính cả lượt đã mua (5 + `attemptsBought` ở lớp dùng thử).
+        attemptsBought: { type: integer, minimum: 0, description: "Từ 1.1.0: số lượt đã mua (đã thu Xu) đang tính vào giới hạn." }
 
     Submission:
       type: object
@@ -1461,7 +1585,14 @@ components:
           description: Chỉ với bộ bài tập, không có đáp án. Đề thi không có (đề chỉ hiện khi bắt đầu lượt làm).
           items: { $ref: "#/components/schemas/PublicQuestion" }
         attemptsUsed: { type: integer, minimum: 0, description: "Số lần mình đã nộp bài này (mọi lượt đã nộp, kể cả lượt đề quá giờ được tự nộp)." }
-        attemptLimit: { type: [integer, "null"], description: Số lần tối đa; null là không giới hạn. }
+        attemptLimit: { type: [integer, "null"], description: "Số lần tối đa; null là không giới hạn. Từ 1.1.0 tính cả lượt đã mua." }
+        attemptsBought: { type: integer, minimum: 0, description: "Từ 1.1.0: số lượt đã mua đang tính vào giới hạn." }
+        canBuyAttempt:
+          type: boolean
+          description: |
+            Từ 1.1.0: mua thêm lượt được ngay: giới hạn đang áp dụng, đã dùng hết lượt, không có lượt đang làm, không có lần mua đang chờ và
+            classroom đã nối commerce. Giá lấy ở danh mục của commerce (`skus`).
+        pendingAttemptGrantId: { type: [string, "null"], format: uuid, description: "Từ 1.1.0: lần mua thêm lượt đang chờ commerce trả lời, nếu có." }
         firstAttempt: { type: boolean, description: "Chưa nộp lần nào: lần nộp tới được XP (learning quyết, có trần mỗi ngày)." }
         openRunId: { type: [string, "null"], format: uuid, description: "Lượt đang làm dở, nếu có." }
         assignments:
@@ -1501,7 +1632,8 @@ components:
           description: Bộ bài tập, các câu đã trả lời kèm điểm và đáp án.
           items: { $ref: "#/components/schemas/CheckedAnswer" }
         attemptsUsed: { type: integer, minimum: 0, description: Số lần đã nộp trước lượt này. }
-        attemptLimit: { type: [integer, "null"] }
+        attemptLimit: { type: [integer, "null"], description: "Từ 1.1.0 tính cả lượt đã mua." }
+        attemptsBought: { type: integer, minimum: 0, description: "Từ 1.1.0: số lượt đã mua đang tính vào giới hạn." }
         firstAttempt: { type: boolean, description: Lượt này là lần nộp đầu tiên ở bài (được XP). }
         assignments:
           type: array
@@ -1546,3 +1678,38 @@ components:
               description: |
                 Từ 0.8.1. `confirmed` learning đã trả lời; `pending` chưa xác nhận, `xp` là null và sẽ cộng sau; `none` không có XP để cộng
                 (lần làm lại, hoặc không có learning); `failed` learning từ chối hẳn kết quả này, sẽ không cộng: `xp` là 0 (không để null mãi).
+
+    # ---------------------------------------------------------------- 1.1.0 (M9 lát 9d)
+
+    ExtraAttemptRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        quantity: { type: integer, minimum: 1, maximum: 1, default: 1, description: "Mỗi lần một lượt (PHASE2 câu 6)." }
+        expectedPrice:
+          type: integer
+          minimum: 1
+          description: Giá một lượt web đã cho học sinh thấy (từ danh mục của commerce); khác giá hiện tại thì 409 `price_changed`, không trừ gì.
+
+    ExtraAttemptGrant:
+      type: object
+      required: [id, workId, quantity, status, createdAt, grantedAt, failedAt, failure, price, attemptsUsed, attemptLimit, attemptsBought]
+      properties:
+        id: { type: string, format: uuid }
+        workId: { type: string, format: uuid }
+        quantity: { type: integer, minimum: 1 }
+        status:
+          type: string
+          enum: [pending, granted, failed]
+          description: "`pending`: đang chờ commerce, chưa có lượt, chưa chắc đã trừ Xu; `granted`: đã trừ Xu và có lượt; `failed`: không trừ Xu, không có lượt."
+        createdAt: { type: string, format: date-time }
+        grantedAt: { type: [string, "null"], format: date-time }
+        failedAt: { type: [string, "null"], format: date-time }
+        failure:
+          type: [string, "null"]
+          enum: [insufficient_funds, price_changed, purchase_failed, null]
+          description: Vì sao thất bại (cùng mã lỗi 409 đã trả).
+        price: { type: [integer, "null"], description: "Số Xu đã trừ khi `granted`; null khi chưa hoặc không trừ." }
+        attemptsUsed: { type: integer, minimum: 0 }
+        attemptLimit: { type: [integer, "null"], description: "Giới hạn sau lần mua này (đã cộng nếu `granted`)." }
+        attemptsBought: { type: integer, minimum: 0 }

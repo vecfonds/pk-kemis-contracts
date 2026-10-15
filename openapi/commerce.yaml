@@ -1,0 +1,1203 @@
+openapi: 3.1.0
+info:
+  title: PkKemis commerce
+  version: 0.1.0
+  summary: Ví Xu và sổ cái, cửa hàng khung và rương, nạp Xu (thanh toán mô phỏng), thu Xu cho service khác (mua thêm lượt làm bài).
+  description: |
+    0.1.0 (docs/backend/M9-COMMERCE.md): service mới, Spring Boot. Mỗi thao tác ghi lát cài nó ở `x-slice` (`9a` ví và sổ cái, `9b` cửa hàng,
+    `9c` nạp mô phỏng, `9d` thu Xu cho classroom, `9g` admin, `9h` khung ở mọi nơi); trước lát đó thao tác chưa có.
+
+    - Token là access token của identity (xem identity.yaml); service tự kiểm bằng khóa công khai (JWKS), không gọi identity. Người dùng là
+      `sub` của token, **không bao giờ** lấy từ thân yêu cầu.
+    - **Chỉ học sinh có ví** (vai trò trong token). Giáo viên và admin đọc được danh mục (`GET /v1/shop/catalog`); mọi đường `/v1/me/**`
+      khác trả 403 với họ. Ví tạo lúc cần lần đầu (học sinh mở cửa hàng, hay sự kiện XP đầu tiên tới); lúc tạo có thể có một dòng số dư ban
+      đầu (loại `grant`, theo biến `COMMERCE_STARTING_BALANCE` của service, mặc định 0).
+    - **Máy chủ giữ giá.** Máy khách chỉ gửi ý định (rương nào, khung nào, gói nào); có thể gửi kèm giá đã thấy (`expectedPrice`) để máy chủ
+      từ chối (409 `price_changed`) thay vì trừ một giá khác với giá trên màn hình.
+    - **Sổ cái chỉ thêm:** mọi thay đổi số dư là một dòng `LedgerEntry` ghi cùng giao dịch với hệ quả (lượt quay, khung đã có, đơn đã trả).
+      Không dòng nào bị sửa hay xóa; sai thì admin ghi dòng bù (`adjustment`). Số dư không bao giờ âm; thiếu tiền là 409 `insufficient_funds`
+      kèm `balance` và `required` (web mở hộp Nạp).
+    - **Chống lặp:** mọi thao tác `POST` có tiền của người dùng cần header `Idempotency-Key` (web sinh một mã cho mỗi lần bấm, gửi lại đúng
+      mã khi thử lại). Cùng người, cùng mã, cùng thân: trả lại đúng phản hồi lần đầu (header `Idempotent-Replayed: true`), không làm lại; cùng
+      mã khác thân hay khác thao tác: 422 `idempotency_mismatch`; lần đầu chưa xong: 409 `idempotency_in_progress` kèm `Retry-After`. Mã giữ
+      24 giờ. Service gọi nhau thì chống lặp bằng `reference` duy nhất (`attempt:<mã cấp lượt>`).
+    - **Luật chế độ** (AGENTS.md mục 2.1): service chỉ trả mã và số. Tên Xu / Linh thạch, Rương khung / Bảo hạp, tên độ hiếm, tên bảng xếp
+      hạng do web dịch. Tên khung, chủ đề và mô tả rương giống nhau ở mọi chế độ (docs/shop/PLAN.md quyết định 1) nên có ở đây.
+    - Lỗi theo RFC 9457 (`application/problem+json`), cùng dạng với identity, có `code` ổn định và `detail` tiếng Việt.
+    - `/internal/**` chỉ cho service khác, mỗi bên gọi một khóa riêng (`X-Internal-Key`); khóa quyết định bên gọi là ai và được làm gì.
+      Sai hoặc thiếu khóa là 403. Không mở ra ngoài (gateway ở M13 không bao giờ định tuyến `/internal/**`).
+    - Chỉ thêm, không xóa hay đổi nghĩa trường đã phát hành (README của contracts).
+servers:
+  - url: http://commerce:8080
+    description: Mạng Docker Compose (chưa có gateway)
+security:
+  - bearerAuth: []
+tags:
+  - name: shop
+    description: Danh mục, rương, khung
+  - name: wallet
+    description: Ví, sổ cái
+  - name: payments
+    description: Nạp Xu, đơn, cổng thanh toán mô phỏng
+  - name: admin
+    description: Xem và điều chỉnh ví, nhật ký, đối soát
+  - name: internal
+    description: Service gọi nhau
+
+paths:
+  # ------------------------------------------------------------------ 9b: danh mục và cửa hàng
+
+  /v1/shop/catalog:
+    get:
+      tags: [shop]
+      operationId: getShopCatalog
+      x-slice: 9b
+      summary: Danh mục cửa hàng (mọi vai trò)
+      description: |
+        Khung (rương, bán thẳng, thưởng bảng xếp hạng), rương (giá, tỉ lệ, bảo hiểm), gói nạp, mức hoàn khi trùng, tỉ lệ Xu/XP, giá các thứ
+        khác bán bằng Xu (`skus`, ví dụ một lượt làm bài). Danh mục là tệp trong service, đổi bằng triển khai bản mới; `version` (và `ETag`) đổi
+        khi nội dung đổi. Gửi `If-None-Match` đúng phiên bản thì nhận 304.
+      parameters:
+        - { $ref: "#/components/parameters/IfNoneMatch" }
+      responses:
+        "200":
+          description: Danh mục
+          headers:
+            ETag: { $ref: "#/components/headers/ETag" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Catalog" }
+        "304": { description: Không đổi so với `If-None-Match` }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/me/shop:
+    get:
+      tags: [shop]
+      operationId: getMyShop
+      x-slice: 9b
+      summary: Cửa hàng của mình (học sinh)
+      description: |
+        Số dư, khung đã có, khung đang đeo, bộ đếm bảo hiểm từng rương, trang đầu (50 dòng) của lịch sử quay và sổ cái, mới nhất trước. Trang
+        sau: `GET /v1/me/shop/spins`, `GET /v1/me/wallet/entries` với con trỏ trả kèm. Chưa có ví thì tạo (kèm số dư ban đầu nếu service đặt).
+      responses:
+        "200":
+          description: Trạng thái
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ShopState" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v1/me/shop/spins:
+    get:
+      tags: [shop]
+      operationId: listMySpins
+      x-slice: 9b
+      summary: Lịch sử quay của mình, theo trang (học sinh)
+      parameters:
+        - { $ref: "#/components/parameters/Cursor" }
+        - { $ref: "#/components/parameters/Limit" }
+      responses:
+        "200":
+          description: Một trang, mới nhất trước
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SpinPage" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [shop]
+      operationId: spinChest
+      x-slice: 9b
+      summary: Mở một lượt rương (học sinh)
+      description: |
+        Trong **một** giao dịch: khóa dòng ví, kiểm số dư, rút khung ở máy chủ (`SecureRandom`, tỉ lệ và bảo hiểm của rương như
+        docs/shop/PLAN.md mục 2), trừ giá (dòng `spin`), hoàn nếu trùng khung đã có (dòng `refund`), ghi khung mới, bộ đếm bảo hiểm và lượt
+        quay; xong mới trả lời. Dải quay ở web chỉ để xem, chạy tới kết quả đã có. Gửi lại cùng `Idempotency-Key` trả đúng lượt đó, không quay
+        thêm.
+      parameters:
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SpinRequest" }
+      responses:
+        "201":
+          description: Lượt quay đã ghi; `state` là trạng thái sau lượt (đã tính hoàn tiền)
+          headers:
+            Idempotent-Replayed: { $ref: "#/components/headers/IdempotentReplayed" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SpinResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/MoneyConflict" }
+        "422": { $ref: "#/components/responses/IdempotencyMismatch" }
+
+  /v1/me/shop/purchases:
+    post:
+      tags: [shop]
+      operationId: buyFrame
+      x-slice: 9b
+      summary: Mua một khung bán thẳng (học sinh)
+      description: |
+        Chỉ khung có `source.kind = shop`, chưa có, đủ tiền. Một giao dịch: trừ giá (dòng `purchase`) và ghi khung đã có. Khung đã có: 409
+        `frame_owned` (bấm hai lần không trừ hai lần); không bán: 409 `not_for_sale`; không có: 404 `unknown_item`.
+      parameters:
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PurchaseRequest" }
+      responses:
+        "201":
+          description: Đã mua; trạng thái sau khi mua
+          headers:
+            Idempotent-Replayed: { $ref: "#/components/headers/IdempotentReplayed" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ShopState" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/MoneyConflict" }
+        "422": { $ref: "#/components/responses/IdempotencyMismatch" }
+
+  /v1/me/shop/equipped:
+    put:
+      tags: [shop]
+      operationId: equipFrame
+      x-slice: 9b
+      summary: Đeo một khung đã có, hoặc tháo (học sinh)
+      description: |
+        Không có tiền, lặp lại được nên không cần `Idempotency-Key`. Khung chưa có: 409 `frame_not_owned`. Khi khung đang đeo thật sự đổi,
+        service phát `frame.equipped` (asyncapi/pkkemis.yaml) để các nơi khác vẽ khung (bảng xếp hạng ở lát 9h).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EquipRequest" }
+      responses:
+        "200":
+          description: Trạng thái sau khi đổi
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ShopState" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Chưa có khung này (`frame_not_owned`)
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  # ------------------------------------------------------------------ 9a: ví và sổ cái
+
+  /v1/me/wallet:
+    get:
+      tags: [wallet]
+      operationId: getMyWallet
+      x-slice: 9a
+      summary: Số dư của mình (học sinh)
+      description: |
+        Nhẹ hơn `GET /v1/me/shop`; web gọi lại sau mỗi lần nhận XP (Xu tới sau XP vài giây qua sự kiện `xp.awarded`). `xpRemainder` là phần XP
+        chưa đủ đổi một Xu, cộng dồn sang lần sau.
+      responses:
+        "200":
+          description: Ví
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Wallet" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v1/me/wallet/entries:
+    get:
+      tags: [wallet]
+      operationId: listMyWalletEntries
+      x-slice: 9a
+      summary: Sổ cái của mình, theo trang (học sinh)
+      parameters:
+        - { $ref: "#/components/parameters/Cursor" }
+        - { $ref: "#/components/parameters/Limit" }
+        - name: kind
+          in: query
+          description: Chỉ một loại dòng.
+          schema: { $ref: "#/components/schemas/LedgerKind" }
+      responses:
+        "200":
+          description: Một trang, mới nhất trước
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EntryPage" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  # ------------------------------------------------------------------ 9c: nạp mô phỏng
+
+  /v1/me/shop/top-ups:
+    post:
+      tags: [payments]
+      operationId: createTopUp
+      x-slice: 9c
+      summary: Tạo đơn nạp Xu (học sinh)
+      description: |
+        Tạo đơn `pending` theo gói (giá VND và số Xu do máy chủ giữ). **Chưa cộng gì**: Xu chỉ vào ví khi cổng thanh toán báo đã trả (webhook có
+        chữ ký), đúng một lần cho mỗi đơn (dòng `topup`, `orderCode`). Không giới hạn số lần hay số tiền nạp (docs/shop/PLAN.md quyết định 3).
+        Giai đoạn 2 chỉ có cổng mô phỏng (`provider: fake`); đơn `pending` quá 15 phút thành `expired`.
+      parameters:
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TopUpRequest" }
+      responses:
+        "201":
+          description: Đơn mới, chờ thanh toán
+          headers:
+            Idempotent-Replayed: { $ref: "#/components/headers/IdempotentReplayed" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Order" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Lần đầu của cùng `Idempotency-Key` chưa xong (`idempotency_in_progress`)
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422": { $ref: "#/components/responses/IdempotencyMismatch" }
+
+  /v1/orders/{orderCode}:
+    get:
+      tags: [payments]
+      operationId: getOrder
+      x-slice: 9c
+      summary: Một đơn (chủ đơn, hoặc admin)
+      description: Đơn của người khác giống như không tồn tại (404).
+      parameters:
+        - { $ref: "#/components/parameters/OrderCode" }
+      responses:
+        "200":
+          description: Đơn
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Order" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/payments/fake/checkouts/{orderCode}:
+    post:
+      tags: [payments]
+      operationId: completeFakeCheckout
+      x-slice: 9c
+      x-local-only: true
+      summary: Mô phỏng người dùng trả xong (hoặc hủy) ở cổng thanh toán (chủ đơn)
+      description: |
+        Chỉ có khi service bật cổng mô phỏng (`COMMERCE_FAKE_PAYMENTS=true`, chỉ máy local); tắt thì 404. Đóng vai cổng thanh toán: dựng một
+        webhook với mã giao dịch của cổng cố định theo đơn (`fake-<orderCode>`), ký HMAC bằng bí mật của cổng mô phỏng và gửi **qua HTTP** tới
+        `POST /v1/payments/fake/webhook` của chính service (cùng đường một cổng thật sẽ gọi), rồi trả đơn sau khi webhook được xử lý. Bấm
+        nhiều lần hay gửi lại: cùng mã giao dịch nên Xu chỉ vào ví một lần. Đơn đã `paid` hoặc `failed`: trả đơn như hiện có, không làm gì.
+      parameters:
+        - { $ref: "#/components/parameters/OrderCode" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/FakeCheckoutRequest" }
+      responses:
+        "200":
+          description: Đơn sau khi cổng mô phỏng báo kết quả
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Order" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/payments/fake/webhook:
+    post:
+      tags: [payments]
+      operationId: receiveFakeWebhook
+      x-slice: 9c
+      x-local-only: true
+      summary: Webhook của cổng thanh toán mô phỏng (cổng gọi, không có token)
+      description: |
+        Chỉ có khi `COMMERCE_FAKE_PAYMENTS=true`. Không dùng token người dùng: kiểm chữ ký `X-Fake-Signature` = HMAC-SHA256 (hex, chữ thường)
+        của chuỗi `<X-Fake-Timestamp>.<thân yêu cầu nguyên byte>` bằng `COMMERCE_FAKE_WEBHOOK_SECRET`, so sánh thời gian hằng; thời điểm lệch
+        quá 5 phút cũng bị từ chối. Sai chữ ký: 401, không ghi gì. Đúng chữ ký thì trong một giao dịch: ghi `payments` (mã giao dịch của cổng
+        duy nhất), đơn `pending` (hay `expired`: tiền đã trả thì luôn cộng) thành `paid` với số tiền đúng bằng đơn, ghi dòng `topup` đúng một
+        lần, phát `order.paid`; `status: failed` thì đơn `pending` thành `failed`. Webhook lặp (cùng `providerTxnRef`) hay đơn đã xong: 204,
+        không làm gì. Số tiền khác đơn: 204 (để cổng thôi gửi lại), giao dịch ghi `rejected`, log lỗi, đối soát báo. Cổng thật (VNPay) sau này là
+        một đường webhook khác cùng cách xử lý.
+      security: []
+      parameters:
+        - name: X-Fake-Timestamp
+          in: header
+          required: true
+          description: Giây Unix lúc cổng gửi.
+          schema: { type: string, pattern: "^[0-9]{10}$" }
+        - name: X-Fake-Signature
+          in: header
+          required: true
+          schema: { type: string, pattern: "^[0-9a-f]{64}$" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/FakeWebhook" }
+      responses:
+        "204": { description: Đã nhận (kể cả lặp lại) }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401":
+          description: Sai chữ ký hoặc lệch thời gian (`signature_invalid`)
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # ------------------------------------------------------------------ 9a, 9g: admin
+
+  /v1/admin/wallets/{userId}:
+    get:
+      tags: [admin]
+      operationId: adminGetWallet
+      x-slice: 9a
+      summary: Ví của một học sinh (admin)
+      description: |
+        Admin tìm người ở identity (`/v1/admin/users`) rồi xem ví theo mã người dùng; commerce không biết tên hay email. Chưa có ví: 404.
+      parameters:
+        - { $ref: "#/components/parameters/UserId" }
+      responses:
+        "200":
+          description: Ví
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminWallet" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/admin/wallets/{userId}/entries:
+    get:
+      tags: [admin]
+      operationId: adminListWalletEntries
+      x-slice: 9a
+      summary: Sổ cái của một học sinh, theo trang (admin)
+      parameters:
+        - { $ref: "#/components/parameters/UserId" }
+        - { $ref: "#/components/parameters/Cursor" }
+        - { $ref: "#/components/parameters/Limit" }
+      responses:
+        "200":
+          description: Một trang, mới nhất trước
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminEntryPage" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/admin/wallets/{userId}/adjustments:
+    post:
+      tags: [admin]
+      operationId: adminAdjustWallet
+      x-slice: 9a
+      summary: Cộng hoặc trừ Xu của một học sinh, bắt buộc lý do (admin)
+      description: |
+        Ghi một dòng `adjustment` (dương là cộng, âm là trừ) cùng giao dịch với một dòng nhật ký kiểm toán (`WALLET_ADJUSTED`). Trừ quá số dư:
+        409 `insufficient_funds` (số dư không bao giờ âm). Chưa có ví thì tạo (chỉ gọi cho tài khoản học sinh: commerce không biết vai trò của
+        người khác). Lý do chỉ admin thấy; học sinh thấy dòng "điều chỉnh" và số tiền.
+      parameters:
+        - { $ref: "#/components/parameters/UserId" }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AdjustmentRequest" }
+      responses:
+        "201":
+          description: Đã ghi; ví sau khi điều chỉnh
+          headers:
+            Idempotent-Replayed: { $ref: "#/components/headers/IdempotentReplayed" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminWallet" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/MoneyConflict" }
+        "422": { $ref: "#/components/responses/IdempotencyMismatch" }
+
+  /v1/admin/audit-log:
+    get:
+      tags: [admin]
+      operationId: listCommerceAuditLog
+      x-slice: 9g
+      summary: Nhật ký kiểm toán của commerce (admin)
+      description: Các thao tác của admin trên ví, mới nhất trước. Cùng dạng trang với `GET /v1/admin/audit-log` của classroom. Chỉ đọc.
+      parameters:
+        - name: page
+          in: query
+          schema: { type: integer, minimum: 0, default: 0 }
+        - name: size
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      responses:
+        "200":
+          description: Một trang nhật ký
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuditLogPage" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v1/admin/reconciliation:
+    get:
+      tags: [admin]
+      operationId: getLastReconciliation
+      x-slice: 9a
+      summary: Lần đối soát gần nhất (admin)
+      description: |
+        Đối soát chạy mỗi giờ (một bản nhờ khóa): số dư từng ví bằng tổng sổ cái và bằng `balanceAfter` của dòng cuối; không ví nào âm; mỗi đơn
+        `paid` có đúng một dòng `topup` cùng số Xu và ngược lại; mỗi lần thu `charged` có đúng một dòng trừ và mỗi lần hoàn có đúng một dòng
+        hoàn; Xu từ XP của mỗi ví bằng phần nguyên của tổng XP đã đổi chia 5. `null` khi chưa chạy lần nào.
+      responses:
+        "200":
+          description: Lần gần nhất
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/ReconciliationRun" }
+                  - { type: "null" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v1/admin/reconciliation/runs:
+    post:
+      tags: [admin]
+      operationId: runReconciliation
+      x-slice: 9a
+      summary: Đối soát ngay (admin; qa-e2e gọi sau mỗi bộ có tiền)
+      description: Chạy đồng bộ và trả kết quả. Đang có một lần chạy thì chờ nó xong và trả kết quả đó. Chỉ đọc, không sửa gì.
+      responses:
+        "200":
+          description: Kết quả
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReconciliationRun" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  # ------------------------------------------------------------------ 9d, 9h: nội bộ
+
+  /internal/wallet/charges:
+    post:
+      tags: [internal]
+      operationId: createCharge
+      x-slice: 9d
+      x-callers: [classroom]
+      summary: Thu Xu cho một thứ service khác cấp (với classroom là một lượt làm bài)
+      description: |
+        Bên gọi chỉ gửi `sku` và số lượng; giá do commerce giữ (`skus` của danh mục). Mỗi khóa nội bộ chỉ được thu những `sku` của nó (classroom:
+        `class-work-attempt`), không thì 403 `sku_not_allowed`. `reference` có tiền tố đúng với `sku` (`attempt:` + mã cấp lượt của classroom)
+        và **duy nhất mãi mãi**: lần gọi nào cũng trả cùng một kết cục cho cùng `reference`, kể cả các kết cục từ chối.
+        - Đã có `reference`: trả kết cục đã ghi (thu được: 200 với `Idempotent-Replayed: true`; từ chối: cùng mã 409), không bao giờ trừ lần
+          hai. Cùng `reference` mà khác `userId`, `sku` hay `quantity`: 409 `reference_mismatch`.
+        - Chưa có và đã quá `notAfter`: ghi `reference` là hết hạn và trả 409 `charge_expired` (nhờ vậy một yêu cầu đến trễ sau này cũng không
+          trừ được). Bên gọi chỉ coi một yêu cầu là thất bại hẳn khi nhận một kết cục 409; lỗi mạng hay 5xx thì gửi lại đúng `reference`.
+        - Còn lại, trong một giao dịch: khóa dòng ví (tạo ví nếu chưa có), so `expectedAmount` với giá (409 `price_changed` kèm `price`), số dư
+          (409 `insufficient_funds` kèm `required`, **không** kèm số dư: bên gọi không thấy ví), rồi ghi dòng `attempt` (số âm) và lần thu.
+        - M9 không có đường hoàn: lượt đã mua không hoàn (PHASE2 câu 6). Đấu trường (M11) thêm `POST /internal/wallet/charges/{chargeId}/refund`.
+      security:
+        - internalKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ChargeRequest" }
+      responses:
+        "200":
+          description: Đã thu từ trước (gửi lại cùng `reference`)
+          headers:
+            Idempotent-Replayed: { $ref: "#/components/headers/IdempotentReplayed" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Charge" }
+        "201":
+          description: Vừa thu
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Charge" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "403":
+          description: Sai khóa (`forbidden`) hoặc khóa này không được thu `sku` đó (`sku_not_allowed`)
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "409":
+          description: Kết cục từ chối, cố định cho `reference` này (`insufficient_funds`, `price_changed`, `charge_expired`, `reference_mismatch`)
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /internal/frames/equipped:
+    get:
+      tags: [internal]
+      operationId: listEquippedFrames
+      x-slice: 9h
+      x-callers: [learning]
+      summary: Khung đang đeo của mọi người, theo trang (dựng lại bản sao)
+      description: |
+        Để một service giữ bản sao khung (learning cho bảng xếp hạng) dựng lại từ đầu khi bản sao trống hoặc mất sự kiện (topic chỉ giữ 7
+        ngày). Chỉ người đang đeo khung; thứ tự theo `userId`. `version` cùng số với `frame.equipped`: bên giữ bản sao ghi khi `version` ≥ bản
+        đang có.
+      security:
+        - internalKey: []
+      parameters:
+        - name: after
+          in: query
+          description: Mã người dùng cuối của trang trước.
+          schema: { type: string, format: uuid }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 500 }
+      responses:
+        "200":
+          description: Một trang
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EquippedFramePage" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Access token của identity (RS256).
+    internalKey:
+      type: apiKey
+      in: header
+      name: X-Internal-Key
+      description: |
+        Một khóa cho mỗi bên gọi (`COMMERCE_INTERNAL_KEY_CLASSROOM`, `COMMERCE_INTERNAL_KEY_LEARNING`; arena ở M11), so sánh thời gian hằng.
+        Khóa cho biết bên gọi và việc được làm: classroom thu `class-work-attempt`; learning đọc khung đang đeo. Khóa trống thì không ai
+        vào được đường đó. Thay bằng token giữa service khi có gateway.
+
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: |
+        Một mã cho mỗi lần bấm (web dùng UUID); gửi lại đúng mã khi thử lại sau lỗi mạng. Thiếu: 400 `idempotency_key_required`. Phạm vi là
+        người gọi; giữ 24 giờ.
+      schema: { type: string, pattern: "^[A-Za-z0-9_-]{8,100}$" }
+    IfNoneMatch:
+      name: If-None-Match
+      in: header
+      schema: { type: string }
+    UserId:
+      name: userId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    OrderCode:
+      name: orderCode
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/OrderCode" }
+    Cursor:
+      name: cursor
+      in: query
+      description: Con trỏ `nextCursor` của trang trước; bỏ trống là trang đầu.
+      schema: { type: string, maxLength: 200 }
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+
+  headers:
+    ETag:
+      description: Phiên bản danh mục, trong ngoặc kép.
+      schema: { type: string }
+    IdempotentReplayed:
+      description: "`true` khi đây là phản hồi đã lưu của lần đầu (gửi lại cùng mã), không có gì được làm thêm."
+      schema: { type: string, enum: ["true"] }
+
+  responses:
+    BadRequest:
+      description: Dữ liệu không hợp lệ (`validation_failed`) hoặc thiếu `Idempotency-Key` (`idempotency_key_required`)
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    ValidationFailed:
+      description: Dữ liệu gửi lên không hợp lệ (`validation_failed`), kèm lỗi từng trường
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    Unauthorized:
+      description: Chưa đăng nhập hoặc token không hợp lệ / hết hạn (`token_invalid`)
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    Forbidden:
+      description: Sai vai trò (`forbidden`; ví chỉ dành cho học sinh, đường admin chỉ cho admin) hoặc sai khóa nội bộ
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    NotFound:
+      description: Không có, không phải của mình, hoặc đường bị tắt (`not_found`, `unknown_item`)
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    IdempotencyMismatch:
+      description: Cùng `Idempotency-Key` đã dùng cho một yêu cầu khác (`idempotency_mismatch`)
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    MoneyConflict:
+      description: |
+        `insufficient_funds` (kèm `balance`, `required`; web mở hộp Nạp), `price_changed` (kèm `price`; web hỏi lại với giá mới),
+        `frame_owned`, `not_for_sale`, hoặc `idempotency_in_progress` (lần đầu chưa xong; thử lại sau `Retry-After` giây)
+      headers:
+        Retry-After:
+          description: Chỉ với `idempotency_in_progress`.
+          schema: { type: integer }
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+
+  schemas:
+    Problem:
+      type: object
+      description: Lỗi theo RFC 9457. Cùng dạng với identity; có thêm các mã và trường của service này.
+      required: [title, status, code]
+      properties:
+        type: { type: string, default: about:blank }
+        title: { type: string }
+        status: { type: integer }
+        code:
+          type: string
+          enum:
+            - validation_failed
+            - token_invalid
+            - forbidden
+            - not_found
+            - internal_error
+            - idempotency_key_required
+            - idempotency_mismatch
+            - idempotency_in_progress
+            - insufficient_funds
+            - price_changed
+            - unknown_item
+            - not_for_sale
+            - frame_owned
+            - frame_not_owned
+            - signature_invalid
+            - sku_not_allowed
+            - reference_mismatch
+            - charge_expired
+        detail: { type: string, description: "Thông báo tiếng Việt, hiển thị được cho người dùng." }
+        balance: { type: integer, format: int64, description: "Chỉ `insufficient_funds` ở đường của người dùng: số dư hiện tại." }
+        required: { type: integer, format: int64, description: "Chỉ `insufficient_funds`: số Xu cần cho thao tác này." }
+        price: { type: integer, format: int64, description: "Chỉ `price_changed`: giá hiện tại." }
+        errors:
+          type: array
+          items:
+            type: object
+            required: [field, message]
+            properties:
+              field: { type: string }
+              message: { type: string }
+
+    Rarity:
+      type: string
+      enum: [common, rare, epic, legendary]
+      description: Mã độ hiếm; web dịch theo chế độ (Phổ biến / Phàm phẩm…).
+
+    FrameSource:
+      description: |
+        Khung từ đâu ra. Bên đọc gặp `kind` lạ thì coi là khung không bán, không có trong rương (sau này thêm `season` cho khung mùa Đấu trường).
+      oneOf:
+        - type: object
+          required: [kind, chestId]
+          additionalProperties: false
+          properties:
+            kind: { const: chest }
+            chestId: { type: string }
+        - type: object
+          required: [kind, price]
+          additionalProperties: false
+          properties:
+            kind: { const: shop }
+            price: { type: integer, minimum: 1 }
+        - type: object
+          required: [kind, period, top]
+          additionalProperties: false
+          description: Thưởng bảng xếp hạng XP, không bán, không có trong rương. Web dựng chữ ("Hạng 1 Bảng xếp hạng tuần") theo chế độ.
+          properties:
+            kind: { const: rank }
+            period: { type: string, enum: [week, month, all] }
+            top: { type: integer, enum: [1, 3], description: "1: hạng nhất; 3: ba hạng đầu." }
+
+    FrameItem:
+      type: object
+      required: [id, name, rarity, source]
+      properties:
+        id: { type: string, description: "Mã khung; ảnh ở `public/assets/frames/<id>.webp` của web." }
+        name: { type: string, description: "Tên khung, giống nhau ở mọi chế độ." }
+        rarity: { $ref: "#/components/schemas/Rarity" }
+        source: { $ref: "#/components/schemas/FrameSource" }
+
+    Chest:
+      type: object
+      required: [id, theme, description, price, odds, pity, itemIds]
+      properties:
+        id: { type: string }
+        theme: { type: string, description: 'Chủ đề ("Muôn Sắc"); web đặt sau từ chỉ rương của chế độ.' }
+        description: { type: string }
+        price: { type: integer, minimum: 1, description: Xu mỗi lượt. }
+        odds:
+          type: object
+          description: Phần trăm mỗi độ hiếm, cộng lại 100. Các khung cùng độ hiếm có cơ hội bằng nhau.
+          required: [common, rare, epic, legendary]
+          additionalProperties: false
+          properties:
+            common: { type: number, minimum: 0, maximum: 100 }
+            rare: { type: number, minimum: 0, maximum: 100 }
+            epic: { type: number, minimum: 0, maximum: 100 }
+            legendary: { type: number, minimum: 0, maximum: 100 }
+        pity:
+          type: object
+          description: Sau `every - 1` lượt liền không ra độ hiếm `atLeast` trở lên thì lượt kế chắc chắn ra (tỉ lệ giữa các độ hiếm đó giữ nguyên).
+          required: [every, atLeast]
+          properties:
+            every: { type: integer, minimum: 1 }
+            atLeast: { $ref: "#/components/schemas/Rarity" }
+        itemIds:
+          type: array
+          description: Các khung trong rương, theo thứ tự (thứ tự dùng khi rút một khung trong cùng độ hiếm).
+          items: { type: string }
+
+    TopUpPack:
+      type: object
+      required: [id, amount, bonus, priceVnd]
+      properties:
+        id: { type: string }
+        amount: { type: integer, minimum: 1, description: Xu mua. }
+        bonus: { type: integer, minimum: 0, description: Xu tặng thêm. }
+        priceVnd: { type: integer, minimum: 1, description: "Giá, số nguyên VND." }
+
+    Sku:
+      type: object
+      description: Thứ khác bán bằng Xu, do service khác cấp (commerce chỉ thu tiền).
+      required: [id, kind, price]
+      properties:
+        id: { type: string, enum: [class-work-attempt], description: "`class-work-attempt`: một lượt làm thêm cho một bài của lớp dùng thử (classroom cấp)." }
+        kind: { type: string, enum: [attempt] }
+        price: { type: integer, minimum: 1, description: Xu mỗi đơn vị. }
+
+    Catalog:
+      type: object
+      required: [version, frames, chests, packs, refund, currencyPerXp, xpPerCoin, skus, fakePayments]
+      properties:
+        version: { type: string, description: Phiên bản danh mục (băm nội dung); bằng `ETag`. }
+        frames:
+          type: array
+          items: { $ref: "#/components/schemas/FrameItem" }
+        chests:
+          type: array
+          items: { $ref: "#/components/schemas/Chest" }
+        packs:
+          type: array
+          items: { $ref: "#/components/schemas/TopUpPack" }
+        refund:
+          type: object
+          description: Xu hoàn khi rương ra khung đã có, theo độ hiếm.
+          required: [common, rare, epic, legendary]
+          additionalProperties: false
+          properties:
+            common: { type: integer, minimum: 0 }
+            rare: { type: integer, minimum: 0 }
+            epic: { type: integer, minimum: 0 }
+            legendary: { type: integer, minimum: 0 }
+        currencyPerXp: { type: number, description: "Xu cho mỗi XP khi học (0,2: 1 Xu mỗi 5 XP), như `ShopCatalog.currencyPerXp` của web." }
+        xpPerCoin: { type: integer, minimum: 1, description: "Số XP đổi một Xu (5). Phần dư cộng dồn sang lần sau (`xpRemainder`)." }
+        skus:
+          type: array
+          items: { $ref: "#/components/schemas/Sku" }
+        fakePayments: { type: boolean, description: Cổng thanh toán mô phỏng đang bật (chỉ máy local); web ghi "Thanh toán mô phỏng" trên hộp Nạp. }
+
+    SpinRecord:
+      type: object
+      required: [id, at, chestId, frameId, rarity, cost, refund, isNew, guaranteed]
+      properties:
+        id: { type: string, format: uuid }
+        at: { type: string, format: date-time }
+        chestId: { type: string }
+        frameId: { type: string }
+        rarity: { $ref: "#/components/schemas/Rarity" }
+        cost: { type: integer, minimum: 1 }
+        refund: { type: integer, minimum: 0, description: Xu hoàn vì đã có khung này. }
+        isNew: { type: boolean }
+        guaranteed: { type: boolean, description: Ra nhờ bảo hiểm. }
+
+    LedgerKind:
+      type: string
+      enum: [earn, topup, spin, refund, purchase, fee, prize, attempt, adjustment, grant]
+      description: |
+        `earn` Xu đổi từ XP; `topup` nạp; `spin` mở rương; `refund` hoàn (rương ra khung đã có; sau này cả phí Đấu trường); `purchase` mua khung;
+        `fee`, `prize` để dành cho Đấu trường (M11); `attempt` mua thêm lượt làm bài; `adjustment` admin điều chỉnh; `grant` số dư ban đầu của
+        ví. Bên đọc gặp loại lạ thì hiện như một dòng chung (số tiền, thời điểm).
+
+    XpSource:
+      type: string
+      enum: [exercise, exam, lesson, lesson_practice, quick, review, class_work]
+      description: Như `XpSource` của asyncapi/pkkemis.yaml.
+
+    LedgerEntry:
+      type: object
+      description: |
+        Một dòng sổ cái, như `LedgerEntry` của web nhưng **không có chữ** (`note`): web dựng nhãn từ `kind` và các mã đi kèm (tên bộ bài tập,
+        đề, bài học lấy từ nội dung theo `itemId`; bài của lớp theo `workId`), theo chế độ.
+      required: [id, at, kind, amount, balanceAfter]
+      properties:
+        id: { type: string, description: "Mã dòng (số nguyên tăng dần, dạng chuỗi)." }
+        at: { type: string, format: date-time }
+        kind: { $ref: "#/components/schemas/LedgerKind" }
+        amount: { type: integer, format: int64, description: "Dương là vào, âm là ra; không bao giờ 0." }
+        balanceAfter: { type: integer, format: int64, minimum: 0 }
+        chestId: { type: string, description: "`spin`." }
+        frameId: { type: string, description: "`spin`, `refund` vì trùng khung, `purchase`." }
+        spinId: { type: string, format: uuid, description: "`spin` và `refund` của lượt đó." }
+        packId: { type: string, description: "`topup`." }
+        priceVnd: { type: integer, description: "`topup`: số VND đã trả." }
+        method: { type: string, description: "`topup`: phương thức người dùng chọn (`bank_qr`, `momo`…)." }
+        orderCode: { $ref: "#/components/schemas/OrderCode" }
+        xpSource: { $ref: "#/components/schemas/XpSource" }
+        xp: { type: integer, minimum: 1, description: "`earn`: số XP của lần cộng đó (Xu = phần nguyên của (phần dư trước + XP) / 5)." }
+        itemId: { type: string, description: "`earn`: mã bộ bài tập, đề, bài học hay bài của lớp đem lại XP, nếu learning gửi kèm." }
+        sku: { type: string, description: "`attempt`." }
+        quantity: { type: integer, minimum: 1 }
+        workId: { type: string, format: uuid, description: "`attempt`: bài của lớp được thêm lượt." }
+        chargeId: { type: string, format: uuid, description: "`attempt`: lần thu (`/internal/wallet/charges`)." }
+
+    AdminLedgerEntry:
+      description: Dòng sổ cái như admin thấy; thêm người điều chỉnh và lý do của dòng `adjustment`.
+      allOf:
+        - $ref: "#/components/schemas/LedgerEntry"
+        - type: object
+          properties:
+            actorId: { type: string, format: uuid, description: "`adjustment`: admin đã ghi." }
+            reason: { type: string, description: "`adjustment`: lý do (chỉ admin thấy)." }
+
+    ShopState:
+      type: object
+      description: Như `ShopState` của web; `spins` và `ledger` chỉ là trang đầu.
+      required: [userId, balance, xpRemainder, owned, equipped, pity, spins, ledger, spinsNextCursor, ledgerNextCursor, catalogVersion]
+      properties:
+        userId: { type: string, format: uuid, description: Mã tài khoản (identity). }
+        balance: { type: integer, format: int64, minimum: 0 }
+        xpRemainder: { type: integer, minimum: 0, description: "XP chưa đủ đổi một Xu (0 tới `xpPerCoin` − 1)." }
+        owned:
+          type: array
+          items: { type: string }
+        equipped: { type: [string, "null"] }
+        pity:
+          type: object
+          description: Số lượt liền chưa ra độ hiếm bảo hiểm, theo mã rương (rương chưa quay thì không có hoặc 0).
+          additionalProperties: { type: integer, minimum: 0 }
+        spins:
+          type: array
+          items: { $ref: "#/components/schemas/SpinRecord" }
+        ledger:
+          type: array
+          items: { $ref: "#/components/schemas/LedgerEntry" }
+        spinsNextCursor: { type: [string, "null"] }
+        ledgerNextCursor: { type: [string, "null"] }
+        catalogVersion: { type: string }
+
+    SpinRequest:
+      type: object
+      required: [chestId]
+      additionalProperties: false
+      properties:
+        chestId: { type: string }
+        expectedPrice: { type: integer, minimum: 1, description: Giá người dùng đã thấy; khác giá hiện tại thì 409 `price_changed`. }
+
+    SpinResult:
+      type: object
+      required: [record, state]
+      properties:
+        record: { $ref: "#/components/schemas/SpinRecord" }
+        state: { $ref: "#/components/schemas/ShopState" }
+
+    PurchaseRequest:
+      type: object
+      required: [frameId]
+      additionalProperties: false
+      properties:
+        frameId: { type: string }
+        expectedPrice: { type: integer, minimum: 1 }
+
+    EquipRequest:
+      type: object
+      required: [frameId]
+      additionalProperties: false
+      properties:
+        frameId: { type: [string, "null"], description: null là tháo khung. }
+
+    Wallet:
+      type: object
+      required: [userId, balance, xpRemainder, xpPerCoin, createdAt]
+      properties:
+        userId: { type: string, format: uuid }
+        balance: { type: integer, format: int64, minimum: 0 }
+        xpRemainder: { type: integer, minimum: 0 }
+        xpPerCoin: { type: integer, minimum: 1 }
+        createdAt: { type: string, format: date-time }
+
+    EntryPage:
+      type: object
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/LedgerEntry" }
+        nextCursor: { type: [string, "null"] }
+
+    AdminEntryPage:
+      type: object
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/AdminLedgerEntry" }
+        nextCursor: { type: [string, "null"] }
+
+    SpinPage:
+      type: object
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/SpinRecord" }
+        nextCursor: { type: [string, "null"] }
+
+    OrderCode:
+      type: string
+      pattern: "^PK[0-9]{6}-[0-9]{6}$"
+      description: '"PK" + yymmdd (giờ Việt Nam) + "-" + 6 chữ số ngẫu nhiên, duy nhất (như mã đơn của web, thêm chữ số).'
+
+    PaymentMethod:
+      type: string
+      enum: [bank_qr, domestic_card, credit_card, momo, zalopay]
+      description: Như `PaymentMethod` của web. Cổng mô phỏng nhận mọi phương thức.
+
+    TopUpRequest:
+      type: object
+      required: [packId, method]
+      additionalProperties: false
+      properties:
+        packId: { type: string }
+        method: { $ref: "#/components/schemas/PaymentMethod" }
+
+    Order:
+      type: object
+      required: [code, purpose, status, packId, coins, priceVnd, method, provider, createdAt, expiresAt, paidAt]
+      properties:
+        code: { $ref: "#/components/schemas/OrderCode" }
+        purpose: { type: string, enum: [top_up], description: "Sau này thêm `class_license` (suất lớp, khi có cổng thật)." }
+        status:
+          type: string
+          enum: [pending, paid, failed, expired]
+          description: "`expired`: quá 15 phút chưa trả; nếu sau đó cổng vẫn báo đã trả thì thành `paid` (tiền đã trả thì luôn cộng)."
+        packId: { type: string }
+        coins: { type: integer, minimum: 1, description: Xu sẽ vào ví (gói + thưởng). }
+        priceVnd: { type: integer, minimum: 1 }
+        method: { $ref: "#/components/schemas/PaymentMethod" }
+        provider: { type: string, enum: [fake], description: Cổng; sau này thêm `vnpay`. }
+        createdAt: { type: string, format: date-time }
+        expiresAt: { type: string, format: date-time }
+        paidAt: { type: [string, "null"], format: date-time }
+        qrPayload: { type: string, description: "Chỉ cổng mô phỏng, đơn `pending`: chuỗi để vẽ mã QR mẫu (không phải mã thanh toán thật)." }
+
+    FakeCheckoutRequest:
+      type: object
+      required: [outcome]
+      additionalProperties: false
+      properties:
+        outcome: { type: string, enum: [paid, failed], description: "Cổng mô phỏng báo đã trả, hay thanh toán thất bại." }
+
+    FakeWebhook:
+      type: object
+      required: [eventId, orderCode, providerTxnRef, status, amountVnd, occurredAt]
+      additionalProperties: false
+      properties:
+        eventId: { type: string, format: uuid }
+        orderCode: { $ref: "#/components/schemas/OrderCode" }
+        providerTxnRef: { type: string, minLength: 1, maxLength: 100, description: "Mã giao dịch của cổng; duy nhất theo cổng (`payments`)." }
+        status: { type: string, enum: [paid, failed] }
+        amountVnd: { type: integer, minimum: 0 }
+        occurredAt: { type: string, format: date-time }
+
+    AdminWallet:
+      type: object
+      required: [userId, balance, xpRemainder, createdAt, owned, equipped, entries, entriesNextCursor]
+      properties:
+        userId: { type: string, format: uuid }
+        balance: { type: integer, format: int64, minimum: 0 }
+        xpRemainder: { type: integer, minimum: 0 }
+        createdAt: { type: string, format: date-time }
+        owned:
+          type: array
+          items: { type: string }
+        equipped: { type: [string, "null"] }
+        entries:
+          type: array
+          description: Trang đầu (50 dòng) của sổ cái, mới nhất trước.
+          items: { $ref: "#/components/schemas/AdminLedgerEntry" }
+        entriesNextCursor: { type: [string, "null"] }
+
+    AdjustmentRequest:
+      type: object
+      required: [amount, reason]
+      additionalProperties: false
+      properties:
+        amount:
+          type: integer
+          format: int64
+          minimum: -100000000
+          maximum: 100000000
+          not: { const: 0 }
+          description: Dương là cộng, âm là trừ; khác 0.
+        reason: { type: string, minLength: 1, maxLength: 500 }
+
+    AuditLogPage:
+      type: object
+      required: [items, page, size, total]
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            required: [id, actorId, action, targetUserId, amount, reason, createdAt]
+            properties:
+              id: { type: string, format: uuid }
+              actorId: { type: string, format: uuid }
+              action: { type: string, enum: [WALLET_ADJUSTED] }
+              targetUserId: { type: string, format: uuid }
+              amount: { type: integer, format: int64 }
+              reason: { type: string }
+              createdAt: { type: string, format: date-time }
+        page: { type: integer }
+        size: { type: integer }
+        total: { type: integer, format: int64 }
+
+    ReconciliationRun:
+      type: object
+      required: [id, startedAt, finishedAt, ok, walletsChecked, ordersChecked, chargesChecked, issues]
+      properties:
+        id: { type: string, format: uuid }
+        startedAt: { type: string, format: date-time }
+        finishedAt: { type: string, format: date-time }
+        ok: { type: boolean, description: Không có chỗ lệch nào. }
+        walletsChecked: { type: integer, minimum: 0 }
+        ordersChecked: { type: integer, minimum: 0 }
+        chargesChecked: { type: integer, minimum: 0 }
+        issues:
+          type: array
+          maxItems: 200
+          description: Tối đa 200 chỗ lệch đầu tiên (đủ để xem; log có đủ).
+          items:
+            type: object
+            required: [kind]
+            properties:
+              kind:
+                type: string
+                enum:
+                  - balance_mismatch
+                  - chain_broken
+                  - negative_balance
+                  - order_without_topup
+                  - topup_without_order
+                  - payment_rejected
+                  - charge_without_entry
+                  - entry_without_charge
+                  - xp_mismatch
+                  - spin_mismatch
+              userId: { type: string, format: uuid }
+              ref: { type: string, description: "Mã đơn, mã lần thu, mã lượt quay hay mã dòng liên quan." }
+              expected: { type: integer, format: int64 }
+              actual: { type: integer, format: int64 }
+
+    ChargeRequest:
+      type: object
+      required: [userId, sku, quantity, reference, notAfter]
+      additionalProperties: false
+      properties:
+        userId: { type: string, format: uuid, description: Học sinh (bên gọi đã kiểm vai trò từ token của học sinh). }
+        sku: { type: string, enum: [class-work-attempt] }
+        quantity: { type: integer, minimum: 1, maximum: 1, description: "M9 chỉ mua từng lượt; nới giới hạn sau là bản thêm." }
+        reference:
+          type: string
+          pattern: "^attempt:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          description: Khóa chống lặp duy nhất mãi mãi, tiền tố theo `sku` (`attempt:` + mã cấp lượt của classroom, viết thường).
+        expectedAmount: { type: integer, minimum: 0, description: Tổng giá bên gọi đã cho người dùng thấy; khác thì 409 `price_changed`. }
+        notAfter:
+          type: string
+          format: date-time
+          description: Sau thời điểm này commerce không thu cho `reference` này nữa (409 `charge_expired`), để bên gọi kết thúc được một lần thu mà nó không biết kết quả.
+        context:
+          type: object
+          additionalProperties: false
+          properties:
+            workId: { type: string, format: uuid, description: Bài của lớp được thêm lượt (để học sinh thấy trong lịch sử ví). }
+
+    Charge:
+      type: object
+      required: [chargeId, reference, userId, sku, quantity, amount, status, chargedAt]
+      properties:
+        chargeId: { type: string, format: uuid }
+        reference: { type: string }
+        userId: { type: string, format: uuid }
+        sku: { type: string }
+        quantity: { type: integer, minimum: 1 }
+        amount: { type: integer, format: int64, minimum: 0, description: Số Xu đã trừ. }
+        status: { type: string, enum: [charged], description: "0.1.0 chỉ có `charged` (M9 không hoàn lần thu nào). Đấu trường (M11) thêm đường hoàn và giá trị `refunded` (bản thêm)." }
+        chargedAt: { type: string, format: date-time }
+
+    EquippedFramePage:
+      type: object
+      required: [items, next]
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            required: [userId, frameId, version]
+            properties:
+              userId: { type: string, format: uuid }
+              frameId: { type: string }
+              version: { type: integer, format: int64, minimum: 1 }
+        next: { type: [string, "null"], format: uuid, description: Truyền vào `after` để lấy trang sau; null là hết. }

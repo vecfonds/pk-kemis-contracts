@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: PkKemis learning
-  version: 1.0.0
+  version: 1.1.0
   summary: Nội dung học, bài tập, đề thi, chấm điểm, sổ cái XP, tiến độ, sổ tay lỗi sai, bảng xếp hạng.
   description: |
     Giai đoạn 1 (docs/backend/M3-LEARNING.md): bộ bài tập và đề thi, lượt làm bài do máy chủ chấm, XP, cấp độ, chuỗi ngày.
@@ -24,6 +24,10 @@ info:
 
     Thêm (lát 7b): `GET /v1/content` (nội dung theo vai trò người gọi, một phản hồi, có ETag), `POST /v1/exam-overlap` (so một đoạn chữ với
     đề bài của đề đang mở ở máy chủ), `ExamSummary.partCounts`, `ExamSummary.chapterIds`, ETag cho `GET /v1/bank/questions`.
+
+    1.1.0 (docs/backend/M9-COMMERCE.md, lát 9h, chỉ thêm): `LeaderboardEntry.frameId`, khung avatar đang đeo của từng người trên bảng xếp
+    hạng. learning giữ bản sao khung từ sự kiện `frame.equipped` của commerce (asyncapi/pkkemis.yaml 0.2.0), dựng lại bằng
+    `GET /internal/frames/equipped` của commerce khi bản sao trống.
 
     - Từ 1.0.0 lại chỉ thêm, không xóa hay đổi nghĩa của trường đã phát hành.
     - Token là access token của identity (xem identity.yaml); service tự kiểm bằng khóa công khai, không gọi identity.
@@ -550,6 +554,8 @@ paths:
         Từ 1.0.0 (7b): câu mà mọi nơi dùng nó đều là đề chưa mở (`upcoming`) thì học sinh nhận 409 `exam_not_open`, và câu đó cũng vắng khỏi
         `PracticeCatalog.questions`, `PracticeCatalog.chapters[].questionCount` và `ContentView` của học sinh. Câu còn nằm trong bộ bài tập,
         Luyện tập nhanh hoặc đề đang mở/đã xong thì đọc được. Giáo viên, admin không đổi.
+      parameters:
+        - { $ref: "#/components/parameters/QuestionId" }
       responses:
         "200":
           description: Câu hỏi
@@ -2808,6 +2814,11 @@ components:
         xp: { type: integer, description: XP trong kỳ. }
         rankChange: { type: [integer, "null"] }
         isMe: { type: boolean }
+        frameId:
+          type: [string, "null"]
+          description: |
+            Từ 1.1.0 (lát 9h): mã khung avatar người này đang đeo (commerce), null khi không đeo. Tùy chọn trong schema; learning từ 9h luôn gửi.
+            Chỉ là mã; ảnh khung ở web (`public/assets/frames/<id>.webp`).
 
     LeaderboardBoard:
       type: object

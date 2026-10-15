@@ -1,7 +1,7 @@
 asyncapi: 3.0.0
 info:
   title: PkKemis — sự kiện giữa các service
-  version: 0.1.0
+  version: 0.2.0
   description: |
     Hợp đồng sự kiện trên Kafka của PkKemis (docs/backend/M8-EVENTS.md). Cùng quy tắc với OpenAPI: **chỉ thêm, không xóa hay đổi nghĩa**.
 
@@ -9,6 +9,11 @@ info:
     (bảng `people`) ngay thay vì chờ hết hạn 10 phút; learning phát `xp.awarded` cho mọi lần cộng XP (M9 commerce mới nghe). Thao tác
     và tin nhắn ghi lát cài nó ở `x-slice` (`8d` identity, `8e` learning). `POST /internal/class-work-results` (REST + outbox của M6 L6) giữ
     nguyên, không chuyển sang sự kiện.
+
+    0.2.0 (M9, commerce; docs/backend/M9-COMMERCE.md, chỉ thêm): commerce nghe `xp.awarded` để đổi XP ra Xu (lát `9a`); `xp.awarded` thêm
+    `itemId` (tùy chọn); topic mới `commerce.events` với `wallet.changed` (`9a`), `frame.equipped` (`9b`, learning nghe từ `9h` để vẽ khung
+    trên bảng xếp hạng), `order.paid` (`9c`); DLQ `commerce.events.dlq`; lý do DLQ `rejected`. **Từ lát `9.0` Kafka bật SASL/SCRAM và ACL**
+    (trước khi có tiền đi qua sự kiện): mỗi service một tài khoản, chỉ ghi được topic của mình và DLQ của topic nó đọc (`x-acl` ở từng kênh).
 
     **Phong bì:** mọi tin là một CloudEvent 1.0 dạng structured (cả phong bì là giá trị của bản ghi Kafka, JSON UTF-8), header
     `content-type: application/cloudevents+json; charset=UTF-8`. Khóa bản ghi là `subject` (mã người dùng), nên sự kiện của cùng một người
@@ -31,6 +36,8 @@ info:
       description: Tài khoản, vai trò, khóa, quyền riêng tư
     - name: learning
       description: Sổ cái XP
+    - name: commerce
+      description: Ví Xu, khung, đơn nạp
 
 defaultContentType: application/cloudevents+json
 
@@ -40,8 +47,13 @@ servers:
     protocol: kafka
     protocolVersion: "4.3"
     description: |
-      Kafka trên máy này (Docker Compose): Apache Kafka 4.3, chế độ KRaft, một broker (pk-kemis-platform `compose.yml`). PLAINTEXT, chỉ trong mạng Compose, không mở cổng ra ngoài
-      máy. Tắt tự tạo topic (`auto.create.topics.enable=false`): topic do platform tạo lúc khởi động với cấu hình ở từng kênh dưới đây.
+      Kafka trên máy này (Docker Compose): Apache Kafka 4.3, chế độ KRaft, một broker (pk-kemis-platform `compose.yml`). Chỉ trong mạng Compose,
+      không mở cổng ra ngoài máy. Tắt tự tạo topic (`auto.create.topics.enable=false`): topic do platform tạo lúc khởi động với cấu hình ở từng
+      kênh dưới đây. M8: PLAINTEXT. **Từ lát 9.0 (M9):** listener của mạng Compose là `SASL_PLAINTEXT` với SCRAM-SHA-512, mỗi service một
+      tài khoản (`identity`, `learning`, `commerce`; `kafka-ui` chỉ đọc), `StandardAuthorizer`, không ACL thì không được gì
+      (`allow.everyone.if.no.acl.found=false`). Quyền từng tài khoản ghi ở `x-acl` của mỗi kênh; công cụ quản trị chỉ chạy trong container Kafka.
+    security:
+      - $ref: "#/components/securitySchemes/kafkaScram"
 
 channels:
   identityEvents:
@@ -50,6 +62,7 @@ channels:
     description: |
       Chỉ identity ghi. Khóa = mã người dùng. Mọi sự kiện `user.*` mang ảnh chụp hồ sơ công khai (`data.user`) sau thay đổi, nên bên giữ bản
       sao chỉ cần một cách xử lý cho cả sáu loại: ghi `data.user` khi `version` mới lớn hơn hoặc bằng bản đang có.
+    x-acl: { write: [identity], read: [learning] }
     messages:
       userRegistered: { $ref: "#/components/messages/UserRegistered" }
       userProfileUpdated: { $ref: "#/components/messages/UserProfileUpdated" }
@@ -74,6 +87,7 @@ channels:
       Bên nghe `identity.events` ghi vào đây khi một bản ghi không đọc được hoặc xử lý hỏng sau mọi lần thử lại (M8-EVENTS.md mục 5.4).
       Dùng chung cho mọi nhóm đọc; header `pk-dlq-group` cho biết của ai. Người xem và gửi lại bằng tay (Kafka UI,
       `pk-kemis-platform/scripts/kafka-dlq.sh`); không service nào tự đọc topic này. Giữ 30 ngày.
+    x-acl: { write: [learning], read: [] }
     messages:
       deadLetter: { $ref: "#/components/messages/DeadLetter" }
     bindings:
@@ -89,7 +103,10 @@ channels:
   learningEvents:
     address: learning.events
     title: Sự kiện của learning
-    description: Chỉ learning ghi. Khóa = mã người dùng. 0.1.0 chỉ có `xp.awarded`; chưa ai nghe cho tới M9 (commerce đổi XP ra Xu).
+    description: |
+      Chỉ learning ghi. Khóa = mã người dùng. 0.1.0 chỉ có `xp.awarded`; từ 0.2.0 commerce nghe (nhóm `commerce`) để đổi XP ra Xu. Từ lát 9.0
+      ACL bảo đảm chỉ learning ghi được topic này: ai ghi được ở đây là in được Xu.
+    x-acl: { write: [learning], read: [commerce] }
     messages:
       xpAwarded: { $ref: "#/components/messages/XpAwarded" }
     bindings:
@@ -106,11 +123,50 @@ channels:
     address: learning.events.dlq
     title: Sự kiện của learning mà một bên nghe bỏ cuộc
     description: Như `identity.events.dlq`. Tạo sẵn ở M8 cho đồng bộ; có người ghi từ M9 (commerce).
+    x-acl: { write: [commerce], read: [] }
     messages:
       deadLetter: { $ref: "#/components/messages/DeadLetter" }
     bindings:
       kafka:
         topic: learning.events.dlq
+        partitions: 1
+        replicas: 1
+        topicConfiguration:
+          cleanup.policy: [delete]
+          retention.ms: 2592000000
+        bindingVersion: "0.5.0"
+
+  commerceEvents:
+    address: commerce.events
+    title: Sự kiện của commerce
+    description: |
+      Chỉ commerce ghi (từ 0.2.0). Khóa = mã người dùng (chủ ví). Mỗi sự kiện ghi outbox trong cùng giao dịch với thay đổi (bảng `outbox` cùng
+      cột như M8). Platform tạo topic ở lát 9a.
+    x-acl: { write: [commerce], read: [learning] }
+    messages:
+      walletChanged: { $ref: "#/components/messages/WalletChanged" }
+      frameEquipped: { $ref: "#/components/messages/FrameEquipped" }
+      orderPaid: { $ref: "#/components/messages/OrderPaid" }
+    bindings:
+      kafka:
+        topic: commerce.events
+        partitions: 3
+        replicas: 1
+        topicConfiguration:
+          cleanup.policy: [delete]
+          retention.ms: 604800000
+        bindingVersion: "0.5.0"
+
+  commerceEventsDlq:
+    address: commerce.events.dlq
+    title: Sự kiện của commerce mà một bên nghe bỏ cuộc
+    description: Như `identity.events.dlq`. Có người ghi từ lát 9h (learning nghe `frame.equipped`).
+    x-acl: { write: [learning], read: [] }
+    messages:
+      deadLetter: { $ref: "#/components/messages/DeadLetter" }
+    bindings:
+      kafka:
+        topic: commerce.events.dlq
         partitions: 1
         replicas: 1
         topicConfiguration:
@@ -193,7 +249,97 @@ operations:
     x-service: learning
     x-slice: 8e
 
+  commerceReceivesXpEvents:
+    action: receive
+    channel: { $ref: "#/channels/learningEvents" }
+    title: commerce đổi XP ra Xu
+    description: |
+      Nhóm đọc `commerce`, bắt đầu từ đầu topic khi nhóm chưa có vị trí. Mỗi sự kiện một giao dịch: `processed_events` (chống trùng theo `id`),
+      kiểm `source` = `/learning` và `subject` = `data.userId`; bỏ qua (ghi nhận, không cộng) khi `awardedAt` trước mốc commerce bắt đầu đổi
+      (không bù XP cũ) hay `data.source` không đổi ra Xu; còn lại khóa dòng ví (tạo nếu chưa có), cộng phần nguyên của (phần dư + XP) / 5 Xu
+      bằng một dòng `earn` có khóa nguồn `xp:<awardId>` duy nhất, giữ phần dư. Số XP ngoài khoảng hợp lệ của commerce thì vào DLQ với lý do
+      `rejected` (không thử lại).
+    messages:
+      - $ref: "#/channels/learningEvents/messages/xpAwarded"
+    bindings:
+      kafka:
+        groupId: { type: string, const: commerce }
+        clientId: { type: string, const: commerce }
+        bindingVersion: "0.5.0"
+    x-service: commerce
+    x-slice: 9a
+
+  commerceDeadLettersXpEvents:
+    action: send
+    channel: { $ref: "#/channels/learningEventsDlq" }
+    title: commerce bỏ cuộc một sự kiện của learning
+    messages:
+      - $ref: "#/channels/learningEventsDlq/messages/deadLetter"
+    bindings:
+      kafka:
+        clientId: { type: string, const: commerce }
+        bindingVersion: "0.5.0"
+    x-service: commerce
+    x-slice: 9a
+
+  commercePublishesEvents:
+    action: send
+    channel: { $ref: "#/channels/commerceEvents" }
+    title: commerce phát thay đổi của ví, khung, đơn
+    description: |
+      Ghi vào bảng `outbox` trong cùng giao dịch với thay đổi, tiến trình đẩy gửi theo thứ tự `outbox.id`. Mọi thao tác đổi ví hay khung của
+      một người đã khóa dòng ví của người đó trước, nên thứ tự `outbox.id` của cùng một người trùng thứ tự ghi.
+    messages:
+      - $ref: "#/channels/commerceEvents/messages/walletChanged"
+      - $ref: "#/channels/commerceEvents/messages/frameEquipped"
+      - $ref: "#/channels/commerceEvents/messages/orderPaid"
+    bindings:
+      kafka:
+        clientId: { type: string, const: commerce }
+        bindingVersion: "0.5.0"
+    x-service: commerce
+    x-slice: 9a
+
+  learningReceivesFrameEvents:
+    action: receive
+    channel: { $ref: "#/channels/commerceEvents" }
+    title: learning giữ bản sao khung đang đeo cho bảng xếp hạng
+    description: |
+      Nhóm đọc `learning` (bộ xử lý `learning.frames`). Chỉ xử lý `frame.equipped`, bỏ qua loại khác trên topic. Ghi bản sao khung khi
+      `data.version` ≥ bản đang có. Bản sao trống (lần đầu, hay mất sự kiện quá 7 ngày) thì dựng lại bằng `GET /internal/frames/equipped` của
+      commerce.
+    messages:
+      - $ref: "#/channels/commerceEvents/messages/frameEquipped"
+    bindings:
+      kafka:
+        groupId: { type: string, const: learning }
+        clientId: { type: string, const: learning }
+        bindingVersion: "0.5.0"
+    x-service: learning
+    x-slice: 9h
+
+  learningDeadLettersCommerceEvents:
+    action: send
+    channel: { $ref: "#/channels/commerceEventsDlq" }
+    title: learning bỏ cuộc một sự kiện của commerce
+    messages:
+      - $ref: "#/channels/commerceEventsDlq/messages/deadLetter"
+    bindings:
+      kafka:
+        clientId: { type: string, const: learning }
+        bindingVersion: "0.5.0"
+    x-service: learning
+    x-slice: 9h
+
 components:
+  securitySchemes:
+    kafkaScram:
+      type: scramSha512
+      description: |
+        Từ lát 9.0: SASL/SCRAM-SHA-512 trên listener `SASL_PLAINTEXT` của mạng Compose (chưa có TLS: chỉ chạy trong máy này). Mỗi service một
+        tài khoản, mật khẩu ở `.env` của platform; biến của service: `KAFKA_SECURITY_PROTOCOL`, `KAFKA_SASL_MECHANISM`, `KAFKA_SASL_USERNAME`,
+        `KAFKA_SASL_PASSWORD`.
+
   messages:
     UserRegistered:
       name: user.registered
@@ -432,7 +578,7 @@ components:
           key: { $ref: "#/components/schemas/UserKey" }
           bindingVersion: "0.5.0"
       x-producer: learning
-      x-consumers: []
+      x-consumers: [commerce]
       x-slice: 8e
       examples:
         - name: hoanThanhBoBaiTap
@@ -454,6 +600,7 @@ components:
               source: exercise
               refId: 1b7e2c3d-4f5a-4b6c-9d7e-8f9a0b1c2d3e
               awardedAt: "2026-10-16T11:12:09.204Z"
+              itemId: so-oxi-hoa
         - name: baiCuaLop
           summary: Bài của lớp, bị cắt ở trần 300 XP mỗi ngày
           headers:
@@ -473,6 +620,154 @@ components:
               source: class_work
               refId: 5c6d7e8f-9a0b-4c1d-8e2f-3a4b5c6d7e8f
               awardedAt: "2026-10-16T13:00:41.550Z"
+
+    WalletChanged:
+      name: wallet.changed
+      title: Số dư đổi
+      summary: |
+        Một dòng sổ cái vừa ghi (mỗi dòng một sự kiện; một lượt quay trùng khung là hai sự kiện: trừ giá rồi hoàn). Để có dấu vết và để social
+        đẩy số dư mới tới trình duyệt (M13). Không có lý do điều chỉnh của admin.
+      contentType: application/cloudevents+json
+      headers: { $ref: "#/components/schemas/EventHeaders" }
+      payload: { $ref: "#/components/schemas/WalletChangedEvent" }
+      bindings:
+        kafka:
+          key: { $ref: "#/components/schemas/UserKey" }
+          bindingVersion: "0.5.0"
+      x-producer: commerce
+      x-consumers: []
+      x-slice: 9a
+      examples:
+        - name: doiXpRaXu
+          summary: 85 XP của một bộ bài tập thành 17 Xu
+          headers:
+            content-type: application/cloudevents+json; charset=UTF-8
+          payload:
+            specversion: "1.0"
+            id: 019a0b1c-2d3e-7f40-8a51-6b7c8d9e0f12
+            source: /commerce
+            type: wallet.changed
+            time: "2026-10-16T11:12:10.913Z"
+            subject: 3f1c9a52-7b1e-4d8a-9c41-0e5b2d7f6a10
+            datacontenttype: application/json
+            data:
+              entryId: "1042"
+              userId: 3f1c9a52-7b1e-4d8a-9c41-0e5b2d7f6a10
+              kind: earn
+              amount: 17
+              balanceAfter: 1277
+              sourceRef: xp:6d0f1a2b-3c4d-4e5f-8a9b-0c1d2e3f4a5b
+              at: "2026-10-16T11:12:10.913Z"
+        - name: muaThemLuot
+          summary: Mua thêm một lượt làm bài của lớp dùng thử
+          headers:
+            content-type: application/cloudevents+json; charset=UTF-8
+          payload:
+            specversion: "1.0"
+            id: 019a0b2f-4c5d-7e6f-9a01-2b3c4d5e6f70
+            source: /commerce
+            type: wallet.changed
+            time: "2026-10-16T14:03:22.071Z"
+            subject: 3f1c9a52-7b1e-4d8a-9c41-0e5b2d7f6a10
+            datacontenttype: application/json
+            data:
+              entryId: "1057"
+              userId: 3f1c9a52-7b1e-4d8a-9c41-0e5b2d7f6a10
+              kind: attempt
+              amount: -20
+              balanceAfter: 1257
+              sourceRef: attempt:9c8b7a6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d
+              at: "2026-10-16T14:03:22.071Z"
+
+    FrameEquipped:
+      name: frame.equipped
+      title: Khung đang đeo đổi
+      summary: Học sinh đeo một khung khác hoặc tháo khung (`frameId` null). Không phát khi đeo lại đúng khung đang đeo.
+      contentType: application/cloudevents+json
+      headers: { $ref: "#/components/schemas/EventHeaders" }
+      payload: { $ref: "#/components/schemas/FrameEquippedEvent" }
+      bindings:
+        kafka:
+          key: { $ref: "#/components/schemas/UserKey" }
+          bindingVersion: "0.5.0"
+      x-producer: commerce
+      x-consumers: [learning]
+      x-slice: 9b
+      examples:
+        - name: deoKhung
+          summary: Đeo khung vừa quay được
+          headers:
+            content-type: application/cloudevents+json; charset=UTF-8
+          payload:
+            specversion: "1.0"
+            id: 019a0b3a-1b2c-7d3e-8f40-5a6b7c8d9e01
+            source: /commerce
+            type: frame.equipped
+            time: "2026-10-16T15:20:05.338Z"
+            subject: 3f1c9a52-7b1e-4d8a-9c41-0e5b2d7f6a10
+            datacontenttype: application/json
+            data:
+              userId: 3f1c9a52-7b1e-4d8a-9c41-0e5b2d7f6a10
+              frameId: meo-con-day-leo
+              previousFrameId: null
+              version: 1
+              equippedAt: "2026-10-16T15:20:05.338Z"
+        - name: thaoKhung
+          summary: Tháo khung
+          headers:
+            content-type: application/cloudevents+json; charset=UTF-8
+          payload:
+            specversion: "1.0"
+            id: 019a0b3c-6d7e-7f80-9a12-3b4c5d6e7f80
+            source: /commerce
+            type: frame.equipped
+            time: "2026-10-16T15:25:41.002Z"
+            subject: 3f1c9a52-7b1e-4d8a-9c41-0e5b2d7f6a10
+            datacontenttype: application/json
+            data:
+              userId: 3f1c9a52-7b1e-4d8a-9c41-0e5b2d7f6a10
+              frameId: null
+              previousFrameId: meo-con-day-leo
+              version: 2
+              equippedAt: "2026-10-16T15:25:41.002Z"
+
+    OrderPaid:
+      name: order.paid
+      title: Đơn đã thanh toán
+      summary: |
+        Cổng thanh toán báo đã trả và Xu đã vào ví (cùng giao dịch với dòng `topup`). Phát đúng một lần mỗi đơn. Người nghe đầu tiên dự kiến là
+        social (thông báo, M10).
+      contentType: application/cloudevents+json
+      headers: { $ref: "#/components/schemas/EventHeaders" }
+      payload: { $ref: "#/components/schemas/OrderPaidEvent" }
+      bindings:
+        kafka:
+          key: { $ref: "#/components/schemas/UserKey" }
+          bindingVersion: "0.5.0"
+      x-producer: commerce
+      x-consumers: []
+      x-slice: 9c
+      examples:
+        - name: napGoi500
+          summary: Nạp gói 500 (+50) qua cổng mô phỏng
+          headers:
+            content-type: application/cloudevents+json; charset=UTF-8
+          payload:
+            specversion: "1.0"
+            id: 019a0b41-0a1b-7c2d-8e3f-4a5b6c7d8e90
+            source: /commerce
+            type: order.paid
+            time: "2026-10-16T16:02:11.450Z"
+            subject: 3f1c9a52-7b1e-4d8a-9c41-0e5b2d7f6a10
+            datacontenttype: application/json
+            data:
+              orderCode: PK261016-482193
+              userId: 3f1c9a52-7b1e-4d8a-9c41-0e5b2d7f6a10
+              purpose: top_up
+              coins: 550
+              priceVnd: 50000
+              provider: fake
+              paidAt: "2026-10-16T16:02:11.450Z"
 
     DeadLetter:
       name: dead_letter
@@ -516,10 +811,12 @@ components:
         pk-dlq-consumer: { type: string, description: "Bộ xử lý trong nhóm, ví dụ `learning.people`." }
         pk-dlq-reason:
           type: string
-          enum: [invalid_envelope, handler_failed]
+          enum: [invalid_envelope, handler_failed, rejected]
           description: |
             `invalid_envelope`: không phải JSON, không phải CloudEvents 1.0, thiếu `id`/`type`/`subject` (không thử lại).
             `handler_failed`: bộ xử lý vẫn lỗi sau mọi lần thử lại trong khi cơ sở dữ liệu của bên nghe vẫn trả lời.
+            `rejected` (0.2.0): phong bì đúng nhưng bên nghe từ chối theo luật của nó, không thử lại (ví dụ commerce nhận `xp.awarded` có `source`
+            khác `/learning`, `subject` khác `data.userId`, hay số XP ngoài khoảng cho phép). Người xem quyết định gửi lại hay bỏ.
         pk-dlq-error: { type: string, maxLength: 1000, description: "Thông điệp lỗi cuối, không chứa giá trị của sự kiện." }
         pk-dlq-attempts: { type: string, pattern: "^[0-9]+$", description: Số lần đã thử (số thập phân). }
         pk-dlq-original-topic: { type: string }
@@ -545,7 +842,7 @@ components:
         source:
           type: string
           pattern: "^/[a-z]+$"
-          description: Service phát, dạng `/<service>` (`/identity`, `/learning`).
+          description: Service phát, dạng `/<service>` (`/identity`, `/learning`, `/commerce`).
         type:
           type: string
           pattern: "^[a-z_]+(\\.[a-z_0-9]+)+$"
@@ -676,6 +973,14 @@ components:
           maxLength: 100
           description: Thứ đem lại XP, bằng `xp_events.ref_id` (mã lượt làm của learning, mã bài học, mã lượt làm bài lớp của classroom).
         awardedAt: { type: string, format: date-time, description: Bằng `xp_events.created_at` và `time` của phong bì. }
+        itemId:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: |
+            0.2.0 (lát 9a, tùy chọn): mã thứ người học làm (bộ bài tập, đề, bài học, bài của lớp), khác `refId` (mã lượt làm). Có khi learning biết:
+            `exercise`, `exam`: mã bộ hay đề; `lesson`, `lesson_practice`: mã bài học; `class_work`: mã bài của lớp. `quick`, `review`: không có.
+            Commerce chép sang dòng sổ cái để web hiện tên ("Bộ bài tập · …") mà commerce không cần biết tên.
 
     UserRegisteredEvent:
       allOf:
@@ -739,3 +1044,80 @@ components:
             type: { const: xp.awarded }
             source: { const: /learning }
             data: { $ref: "#/components/schemas/XpAwardedData" }
+
+    LedgerKind:
+      type: string
+      enum: [earn, topup, spin, refund, purchase, fee, prize, attempt, adjustment, grant]
+      description: Như `LedgerKind` của openapi/commerce.yaml.
+
+    WalletChangedData:
+      type: object
+      additionalProperties: false
+      required: [entryId, userId, kind, amount, balanceAfter, sourceRef, at]
+      properties:
+        entryId: { type: string, pattern: "^[0-9]+$", description: "Mã dòng sổ cái (số nguyên tăng dần, dạng chuỗi)." }
+        userId: { type: string, format: uuid, description: Chủ ví; bằng `subject`. }
+        kind: { $ref: "#/components/schemas/LedgerKind" }
+        amount: { type: integer, format: int64, not: { const: 0 }, description: "Dương là vào, âm là ra." }
+        balanceAfter: { type: integer, format: int64, minimum: 0 }
+        sourceRef:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: Khóa nguồn duy nhất của dòng (`xp:<awardId>`, `spin:<mã>`, `spin-refund:<mã>`, `purchase:<mã>`, `topup:<mã đơn>`, `attempt:<mã>`, `adjust:<mã>`, `opening:<mã người dùng>`…).
+        at: { type: string, format: date-time }
+
+    FrameEquippedData:
+      type: object
+      additionalProperties: false
+      required: [userId, frameId, previousFrameId, version, equippedAt]
+      properties:
+        userId: { type: string, format: uuid, description: Bằng `subject`. }
+        frameId: { type: [string, "null"], maxLength: 100, description: Khung đang đeo sau thay đổi; null là đã tháo. }
+        previousFrameId: { type: [string, "null"], maxLength: 100 }
+        version:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Tăng 1 mỗi lần khung đang đeo của người này đổi. Bên giữ bản sao chỉ ghi khi `version` ≥ bản đang có.
+        equippedAt: { type: string, format: date-time }
+
+    OrderPaidData:
+      type: object
+      additionalProperties: false
+      required: [orderCode, userId, purpose, coins, priceVnd, provider, paidAt]
+      properties:
+        orderCode: { type: string, pattern: "^PK[0-9]{6}-[0-9]{6}$" }
+        userId: { type: string, format: uuid, description: Người mua; bằng `subject`. }
+        purpose: { type: string, enum: [top_up] }
+        coins: { type: integer, minimum: 1, description: Xu đã vào ví. }
+        priceVnd: { type: integer, minimum: 1 }
+        provider: { type: string, enum: [fake] }
+        paidAt: { type: string, format: date-time }
+
+    WalletChangedEvent:
+      allOf:
+        - $ref: "#/components/schemas/CloudEventEnvelope"
+        - type: object
+          properties:
+            type: { const: wallet.changed }
+            source: { const: /commerce }
+            data: { $ref: "#/components/schemas/WalletChangedData" }
+
+    FrameEquippedEvent:
+      allOf:
+        - $ref: "#/components/schemas/CloudEventEnvelope"
+        - type: object
+          properties:
+            type: { const: frame.equipped }
+            source: { const: /commerce }
+            data: { $ref: "#/components/schemas/FrameEquippedData" }
+
+    OrderPaidEvent:
+      allOf:
+        - $ref: "#/components/schemas/CloudEventEnvelope"
+        - type: object
+          properties:
+            type: { const: order.paid }
+            source: { const: /commerce }
+            data: { $ref: "#/components/schemas/OrderPaidData" }
