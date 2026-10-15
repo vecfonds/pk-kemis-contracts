@@ -6,10 +6,10 @@ Hợp đồng giữa các service của PkKemis và nguồn sự thật cho API.
 
 | File | Service | Trạng thái |
 |---|---|---|
-| `openapi/identity.yaml` | identity | 0.6.0 đã cài (M1, M2, thao tác admin, nhật ký, M6 L7, M7: xác minh email, mã `last_admin`); **0.7.0** viết cho M8 (`UserSummary.version`), chưa cài |
+| `openapi/identity.yaml` | identity | 0.6.0 đã cài (M1, M2, thao tác admin, nhật ký, M6 L7, M7: xác minh email, mã `last_admin`); **0.7.0** cho M8 (`UserSummary.version`), đã cài |
 | `openapi/learning.yaml` | learning | 1.0.0 đã cài (M3, M6, M7: hạn chế đề với học sinh, gỡ snapshot nội bộ, `GET /v1/content`, `POST /v1/exam-overlap`), đối chiếu bằng `test/contract.spec.ts` ở learning |
 | `openapi/classroom.yaml` | classroom | 1.0.0 đã cài (M4, M6, M7: gỡ `/paper` và nộp một lần, `GET /v1/classes/overview`), đối chiếu bằng `test/contract.spec.ts` ở classroom |
-| `asyncapi/pkkemis.yaml` | mọi service (sự kiện trên Kafka) | **0.1.0** viết cho M8: phong bì CloudEvents, topic `identity.events` (`user.*`), `learning.events` (`xp.awarded`), DLQ; chưa cài |
+| `asyncapi/pkkemis.yaml` | mọi service (sự kiện trên Kafka) | **0.1.0** cho M8: phong bì CloudEvents, topic `identity.events` (`user.*`), `learning.events` (`xp.awarded`), DLQ; đã cài |
 
 Kế hoạch M6 và thứ tự các lát: `../pk-kemis-web/docs/backend/M6-CONTENT.md`. M7 (dọn nợ, email): `../pk-kemis-web/docs/backend/M7-DEBT-EMAIL.md`. M8 (Kafka, outbox, sự kiện): `../pk-kemis-web/docs/backend/M8-EVENTS.md`.
 
