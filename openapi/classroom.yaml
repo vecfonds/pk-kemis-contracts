@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: PkKemis classroom
-  version: 0.8.1
+  version: 1.0.0
   summary: Lớp học, suất học, học sinh, bài giáo viên soạn, bài giao, làm bài và kết quả.
   description: |
     Lát A và B của M4 (docs/backend/M4-CLASSROOM.md): tạo lớp, vào lớp bằng mã, suất học và hạn dùng, mua thêm suất, gia hạn, rời lớp, xóa học sinh,
@@ -14,7 +14,12 @@ info:
     0.8.1 (sửa sau soát M6, chỉ thêm): `GET /v1/works/{workId}/paper` không còn đáp án với học sinh; nộp một lần cũng bị giới hạn lượt của lớp
     dùng thử; mã câu tự soạn do máy chủ cấp; `RunResult.xpStatus`.
 
-    - Chỉ thêm, không xóa hay đổi nghĩa của trường đã phát hành.
+    1.0.0 (docs/backend/M7-DEBT-EMAIL.md): **thay đổi phá vỡ có chủ đích** (lát 7a, chủ dự án duyệt kế hoạch giai đoạn 2 ngày 15/10/2026): gỡ
+    hai đường đã đánh dấu bỏ từ 0.8.0, `GET /v1/works/{workId}/paper` và `POST /v1/works/{workId}/attempts` (cùng schema `WorkPaper`); học
+    sinh làm bài của lớp chỉ qua `sheet`, `runs`, `/v1/runs/**`. Chỉ web gọi service này và web đã thôi dùng hai đường đó từ L6. Thêm (lát 7c):
+    `GET /v1/classes/overview`, mọi lớp của giáo viên (hoặc admin) kèm chi tiết và bài nộp trong một lời gọi.
+
+    - Từ 1.0.0 lại chỉ thêm, không xóa hay đổi nghĩa của trường đã phát hành.
     - Token là access token của identity (xem identity.yaml); service tự kiểm bằng khóa công khai.
     - **Máy chủ quyết định** giờ, giá, số suất, hạn dùng, trạng thái lớp, số lớp dùng thử và mã lớp. Máy khách chỉ gửi ý định (số suất, loại mua); số tiền gửi lên bị bỏ qua.
     - **Thanh toán chỉ mô phỏng** ở giai đoạn 1: service ghi lần mua với số tiền tự tính, chưa có cổng thanh toán.
@@ -154,6 +159,41 @@ paths:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
         "429": { $ref: "#/components/responses/TooManyRequests" }
+
+  /v1/classes/overview:
+    get:
+      tags: [classes]
+      operationId: getClassesOverview
+      x-slice: 7c
+      summary: Mọi lớp của mình kèm chi tiết và bài nộp, trong một lời gọi (giáo viên, admin)
+      description: |
+        Để trang Lớp học của giáo viên không phải gọi `GET /v1/classes/{id}` và `GET /v1/classes/{id}/submissions` cho từng lớp. Giáo viên: các
+        lớp mình lập; admin: mọi lớp (chỉ xem). Học sinh 403 (học sinh, kể cả người từng lập lớp, dùng `GET /v1/classes`).
+        - `items`: mỗi lớp đúng như `GET /v1/classes/{id}` trả cho người gọi (học sinh, suất, tiến độ khóa), cùng thứ tự với `GET /v1/classes`.
+          Tiến độ lấy từ learning bằng một lời gọi cho mỗi khóa có lớp (không phải mỗi lớp); learning không trả lời thì các lớp vẫn có, với
+          `progressUnavailable` = true.
+        - `submissions`: bài nộp của mọi lớp trong `items` mà người gọi được xem kết quả, như `GET /v1/classes/{id}/submissions`; lớp nào đường
+          lẻ từ chối (ví dụ lớp bị admin cấm giáo viên) thì không có bài nộp ở đây, các lớp khác không ảnh hưởng.
+      responses:
+        "200":
+          description: Các lớp và bài nộp
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, submissions]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/ClassDetail" }
+                  submissions:
+                    type: array
+                    items: { $ref: "#/components/schemas/Submission" }
+                  trialsLeft:
+                    type: integer
+                    description: Chỉ với giáo viên; như `GET /v1/classes`.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
 
   /v1/classes/{classId}:
     get:
@@ -603,89 +643,6 @@ paths:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
 
-  /v1/works/{workId}/paper:
-    get:
-      tags: [submissions]
-      operationId: getWorkPaper
-      summary: Đề của một bài giao cho mình (học sinh)
-      deprecated: true
-      description: |
-        Chỉ học sinh của một lớp còn chạy (không tạm khóa) đã được giao bài này; khác đi là 404 (không phải bài giao cho mình) hoặc 409 `class_expired`
-        (mọi lớp được giao đều đã hết hạn). Đề kèm đáp án để màn hình luyện tập chấm ngay từng câu; **máy chủ không tin điểm máy khách tính**, chỉ lưu điểm
-        nó tự chấm lại từ câu trả lời gửi lên. Giới hạn đáp án lộ ra trình duyệt: xem docs/backend/M4-CLASSROOM.md.
-
-        **Từ 0.8.1:** học sinh nhận câu như `sheet` (không `answerIndex`, `answer`, `explanation`, `statements[].answer`); đáp án chỉ đến
-        qua `/runs`. Giáo viên và admin của lớp vẫn nhận đủ đáp án.
-
-        **Bỏ từ 0.8.0** (L6): trả đáp án cho học sinh. Dùng `GET /v1/works/{workId}/sheet` và `/v1/works/{workId}/runs`. Web thôi gọi ở L6;
-        gỡ hẳn khi chủ dự án đồng ý (docs/backend/M6-CONTENT.md, câu hỏi 8). Không bao giờ mở ra ngoài mạng nội bộ.
-      parameters:
-        - { $ref: "#/components/parameters/WorkId" }
-      responses:
-        "200":
-          description: Đề
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/WorkPaper" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/Forbidden" }
-        "404": { $ref: "#/components/responses/NotFound" }
-        "409":
-          description: Mọi lớp được giao bài đều tạm khóa (`class_expired`)
-          content:
-            application/problem+json:
-              schema: { $ref: "#/components/schemas/Problem" }
-
-  /v1/works/{workId}/attempts:
-    post:
-      tags: [submissions]
-      operationId: submitWorkAttempt
-      summary: Nộp một lần làm bài (học sinh)
-      deprecated: true
-      description: |
-        **Bỏ từ 0.8.0** (L6): không có đồng hồ đề, không giấu đáp án. Dùng `/v1/works/{workId}/runs` và `/v1/runs/**`. Web thôi gọi ở L6;
-        gỡ hẳn khi chủ dự án đồng ý. Trong lúc còn, lần nộp ở đây cũng được gửi sang learning như lượt làm (XP lần đầu, sổ tay lỗi sai).
-
-        Máy chủ chấm lại từ câu trả lời. Lần làm đầu tiên của học sinh ở mỗi bài giao là **bài nộp** của bài giao đó (các lần sau chỉ để luyện, không đổi bài nộp);
-        nếu bài được giao cho nhiều lớp của học sinh thì lần đầu nộp cho tất cả. Lớp đang dùng thử: tối đa 5 lần mỗi bài (409 `attempt_limit_reached`);
-        có lớp đã mua suất thì không giới hạn. Nộp quá hạn vẫn được, bài nộp được tính là nộp muộn.
-        Số giây do máy khách báo được cắt về thời gian thật tối đa của đề thi.
-      parameters:
-        - { $ref: "#/components/parameters/WorkId" }
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [answers]
-              properties:
-                answers:
-                  type: array
-                  maxItems: 40
-                  items:
-                    type: object
-                    required: [questionId, answer]
-                    properties:
-                      questionId: { type: string }
-                      answer: { $ref: "#/components/schemas/QuestionAnswer" }
-                seconds: { type: number, minimum: 0 }
-      responses:
-        "201":
-          description: Kết quả lần làm
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/AttemptResult" }
-        "400": { $ref: "#/components/responses/ValidationFailed" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/Forbidden" }
-        "404": { $ref: "#/components/responses/NotFound" }
-        "409":
-          description: Hết lượt (`attempt_limit_reached`) hoặc mọi lớp tạm khóa (`class_expired`)
-          content:
-            application/problem+json:
-              schema: { $ref: "#/components/schemas/Problem" }
-
   /v1/me/submissions:
     get:
       tags: [submissions]
@@ -742,8 +699,8 @@ paths:
       x-slice: L6
       summary: Trang làm bài của một bài giao cho mình, không có đáp án (học sinh)
       description: |
-        Thay `GET /v1/works/{workId}/paper`. Quyền như `/paper` (404 khi không phải bài giao cho mình, 409 `class_expired` khi mọi lớp được
-        giao đều tạm khóa). Bộ bài tập có `questions` (không đáp án) để hiện ngay; **đề thi không có câu nào** cho tới khi bắt đầu lượt làm
+        Chỉ học sinh của một lớp còn chạy (không tạm khóa, không bị ẩn) đã được giao bài này: khác đi là 404 (không phải bài giao cho mình) hoặc
+        409 `class_expired` (mọi lớp được giao đều tạm khóa). Bộ bài tập có `questions` (không đáp án) để hiện ngay; **đề thi không có câu nào** cho tới khi bắt đầu lượt làm
         (đồng hồ chạy từ lúc thấy đề), chỉ có số câu từng phần. `openRunId` là lượt đang làm dở (nếu có), để tải lại trang thì làm tiếp.
       parameters:
         - { $ref: "#/components/parameters/WorkId" }
@@ -769,9 +726,9 @@ paths:
       x-slice: L6
       summary: Bắt đầu làm một bài giao cho mình, hoặc làm tiếp lượt đang dở (học sinh)
       description: |
-        Mỗi học sinh một lượt đang mở cho mỗi bài: gọi lại thì trả lượt đó (200), đồng hồ không bắt đầu lại. Quyền và số lần như
-        `POST /v1/works/{workId}/attempts`: lớp dùng thử tối đa 5 lần **đã nộp** (409 `attempt_limit_reached` khi bắt đầu lượt mới),
-        lớp đã mua suất không giới hạn; lớp tạm khóa 409 `class_expired`.
+        Mỗi học sinh một lượt đang mở cho mỗi bài: gọi lại thì trả lượt đó (200), đồng hồ không bắt đầu lại. Quyền như `sheet`. Số lần: lớp
+        dùng thử tối đa 5 lần **đã nộp** mỗi bài (409 `attempt_limit_reached` khi bắt đầu lượt mới, và kiểm lại lúc nộp), có lớp đã mua suất
+        thì không giới hạn; mọi lớp được giao đều tạm khóa thì 409 `class_expired`.
         - Đề thi: `deadline` = giờ bắt đầu + thời gian đề. Lượt quá `deadline` + 15 giây được chấm từ bản nháp và **tính là một lần làm**
           (việc định kỳ mỗi phút, và khi học sinh bắt đầu lại hay mở lượt đó).
         - Đề của lượt cố định từ lúc bắt đầu (`questions`, không đáp án), kể cả khi giáo viên nhân bản hay sửa bài sau đó.
@@ -904,7 +861,8 @@ paths:
       x-slice: L6
       summary: Nộp lượt làm bài của lớp
       description: |
-        Máy chủ chấm và ghi lần làm như `POST /v1/works/{workId}/attempts` (lần làm đầu ở mỗi bài giao là bài nộp, nộp muộn được tính muộn).
+        Máy chủ chấm và ghi lần làm. Lần làm đầu tiên của học sinh ở mỗi bài giao là **bài nộp** của bài giao đó (các lần sau chỉ để luyện,
+        không đổi bài nộp); bài được giao cho nhiều lớp của học sinh thì lần đầu nộp cho tất cả; nộp quá hạn vẫn được, tính là nộp muộn.
         Nộp lại cùng lượt trả đúng kết quả cũ.
         - Đề thi: câu gửi kèm ghi đè bản nháp; nộp sau `deadline` + 15 giây thì chỉ chấm bản nháp (`timedOut`). `seconds` cắt về thời gian thật
           máy chủ đo.
@@ -1288,7 +1246,10 @@ components:
             updatedAt: { type: string, format: date-time }
 
     PaperQuestion:
-      description: Một câu của đề (từ ngân hàng PkKemis hoặc giáo viên tự soạn), kèm đáp án.
+      description: |
+        Một câu của đề (từ ngân hàng PkKemis hoặc giáo viên tự soạn), kèm đáp án. Từ 1.0.0 chỉ còn là bản chụp câu ngân hàng trong bài đã soạn
+        (`WorkItem.question`), mà chỉ giáo viên của bài và admin đọc được, nên luôn đủ đáp án; các ghi chú "vắng khi người nhận là học sinh"
+        là của đường `/paper` đã gỡ.
       type: object
       required: [id, type, chapterId, topic, level, prompt]
       properties:
@@ -1343,30 +1304,8 @@ components:
             type: { const: short }
             text: { type: string, maxLength: 20 }
 
-    WorkPaper:
-      type: object
-      required: [workId, kind, title, courseId, questions, attemptsUsed, assignments]
-      properties:
-        workId: { type: string, format: uuid }
-        kind: { type: string, enum: [exercise, exam] }
-        title: { type: string }
-        description: { type: string }
-        courseId: { type: string }
-        durationMinutes: { type: integer }
-        passPercent: { type: number }
-        questions:
-          type: array
-          items: { $ref: "#/components/schemas/PaperQuestion" }
-        attemptsUsed: { type: integer, minimum: 0, description: Số lần mình đã nộp bài này. }
-        attemptLimit:
-          type: [integer, "null"]
-          description: Số lần tối đa; `null` là không giới hạn (có lớp đã mua suất).
-        assignments:
-          type: array
-          description: Các bài giao của bài này ở các lớp còn chạy của mình.
-          items: { $ref: "#/components/schemas/Assignment" }
-
     AttemptResult:
+      description: Phần chung của kết quả một lần làm bài của lớp; từ 1.0.0 chỉ còn là nền của `RunResult`.
       type: object
       required: [attemptId, correct, total, earned, max, score10, seconds, wrongQuestionIds, handedIn, attemptsUsed]
       properties:
@@ -1521,7 +1460,7 @@ components:
           type: array
           description: Chỉ với bộ bài tập, không có đáp án. Đề thi không có (đề chỉ hiện khi bắt đầu lượt làm).
           items: { $ref: "#/components/schemas/PublicQuestion" }
-        attemptsUsed: { type: integer, minimum: 0, description: Số lần mình đã nộp bài này (tính như `WorkPaper.attemptsUsed`). }
+        attemptsUsed: { type: integer, minimum: 0, description: "Số lần mình đã nộp bài này (mọi lượt đã nộp, kể cả lượt đề quá giờ được tự nộp)." }
         attemptLimit: { type: [integer, "null"], description: Số lần tối đa; null là không giới hạn. }
         firstAttempt: { type: boolean, description: "Chưa nộp lần nào: lần nộp tới được XP (learning quyết, có trần mỗi ngày)." }
         openRunId: { type: [string, "null"], format: uuid, description: "Lượt đang làm dở, nếu có." }

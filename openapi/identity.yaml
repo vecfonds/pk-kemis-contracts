@@ -1,13 +1,18 @@
 openapi: 3.1.0
 info:
   title: PkKemis identity
-  version: 0.5.0
+  version: 0.6.0
   summary: Tài khoản, đăng nhập, token và vai trò.
   description: |
     Đã được chủ dự án duyệt ngày 13/10/2026 (docs/backend/M1-IDENTITY.md).
 
     0.5.0 (docs/backend/M6-CONTENT.md, lát L7): quyền riêng tư "ẩn khỏi bảng xếp hạng" (`/v1/me/privacy`), learning đọc qua
     `/internal/users/batch`. Các thao tác mới ghi lát cài nó ở `x-slice`.
+
+    0.6.0 (docs/backend/M7-DEBT-EMAIL.md, chỉ thêm): xác minh email (`/v1/auth/email/verify`, `/v1/auth/email/resend`, lát 7d); mã lỗi
+    riêng `last_admin` khi hạ hoặc khóa quản trị viên cuối cùng (trước là `forbidden`, cùng status 403; lát 7c).
+    Thư (đặt lại mật khẩu, xác minh) đi qua bộ gửi đang bật: Resend khi có `RESEND_API_KEY`, SMTP khi có `MAIL_SMTP_HOST` (Mailpit khi chạy
+    trên máy, thư không ra ngoài), không có thì không gửi và log không chứa liên kết. Chưa có thao tác nào ở đây cho biết thư đã đi hay chưa.
 
     - Chỉ thêm, không xóa hay đổi nghĩa của trường đã phát hành.
     - Từ 0.3.0 các thao tác admin (`/v1/admin/*`) đã được cài (lát D của M4); `x-phase: 2` còn lại, nếu có, là thao tác chưa cài.
@@ -34,7 +39,10 @@ paths:
       tags: [auth]
       operationId: register
       summary: Đăng ký tài khoản học sinh hoặc giáo viên
-      description: Giáo viên không cần duyệt. Đăng ký xong là đăng nhập luôn.
+      description: |
+        Giáo viên không cần duyệt. Đăng ký xong là đăng nhập luôn.
+        Từ 0.6.0 (7d): identity gửi thư xác minh email (liên kết dùng một lần, sống 24 giờ). Gửi thư hỏng không làm hỏng đăng ký; người dùng
+        xin lại bằng `/v1/auth/email/resend`. Xác minh không bắt buộc: `emailVerified` false vẫn đăng nhập và dùng mọi thứ.
       security: []
       requestBody:
         required: true
@@ -185,6 +193,51 @@ paths:
               schema: { $ref: "#/components/schemas/Problem" }
         "429": { $ref: "#/components/responses/TooManyRequests" }
 
+  /v1/auth/email/verify:
+    post:
+      tags: [auth]
+      operationId: verifyEmail
+      x-slice: 7d
+      summary: Xác minh email bằng mã trong thư
+      description: |
+        Mở từ liên kết trong thư, có khi ở trình duyệt chưa đăng nhập, nên không cần token. Mã đúng, chưa dùng, chưa hết hạn (24 giờ) và email
+        của tài khoản vẫn là email lúc gửi thư thì `emailVerified` thành true; mọi mã khác chưa dùng của người đó hết hiệu lực.
+        Bấm lại một liên kết đã dùng khi email đã được xác minh vẫn trả 204 (bấm hai lần không báo lỗi). Không cấp hay đổi phiên nào.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/VerifyEmailRequest" }
+      responses:
+        "204": { description: Email đã được xác minh (lần này hoặc từ trước) }
+        "400":
+          description: Dữ liệu không hợp lệ (`validation_failed`), hoặc mã sai, hết hạn, đã dùng mà email chưa xác minh (`verification_token_invalid`)
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+
+  /v1/auth/email/resend:
+    post:
+      tags: [auth]
+      operationId: resendVerificationEmail
+      x-slice: 7d
+      summary: Gửi lại thư xác minh email
+      description: |
+        Người đang đăng nhập xin thư mới tới email của tài khoản mình; liên kết cũ chưa dùng vẫn dùng được tới khi hết hạn. Tối đa 3 thư mỗi giờ
+        cho mỗi tài khoản (tính cả thư lúc đăng ký): quá thì 429 kèm `Retry-After`. Email đã xác minh: 409 `email_already_verified`.
+        202 nghĩa là đã nhận yêu cầu; gửi thư hỏng thì identity ghi log, người dùng xin lại sau.
+      responses:
+        "202": { description: Đã nhận yêu cầu }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409":
+          description: Email đã được xác minh (`email_already_verified`)
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+
   /v1/me:
     get:
       tags: [me]
@@ -309,7 +362,9 @@ paths:
       tags: [admin]
       operationId: changeRole
       summary: Đổi vai trò
-      description: Admin không tự đổi vai trò của mình (`self_action_forbidden`). Mọi thao tác ghi vào nhật ký kiểm toán.
+      description: |
+        Admin không tự đổi vai trò của mình (`self_action_forbidden`). Không hạ được quản trị viên cuối cùng (403, từ 0.6.0 mã `last_admin`;
+        trước đó là `forbidden`). Mọi thao tác ghi vào nhật ký kiểm toán.
       parameters:
         - { $ref: "#/components/parameters/UserId" }
       requestBody:
@@ -333,7 +388,9 @@ paths:
       tags: [admin]
       operationId: lockUser
       summary: Khóa tài khoản
-      description: Thu hồi mọi refresh token. Admin không tự khóa mình (`self_action_forbidden`).
+      description: |
+        Thu hồi mọi refresh token. Admin không tự khóa mình (`self_action_forbidden`). Không khóa được quản trị viên cuối cùng (403, từ 0.6.0 mã
+        `last_admin`; trước đó là `forbidden`).
       parameters:
         - { $ref: "#/components/parameters/UserId" }
       requestBody:
@@ -463,7 +520,7 @@ components:
         application/problem+json:
           schema: { $ref: "#/components/schemas/Problem" }
     Forbidden:
-      description: Không đủ quyền (`forbidden`, hoặc `self_action_forbidden`)
+      description: Không đủ quyền (`forbidden`, `self_action_forbidden`, hoặc từ 0.6.0 `last_admin` khi hạ hay khóa quản trị viên cuối cùng)
       content:
         application/problem+json:
           schema: { $ref: "#/components/schemas/Problem" }
@@ -499,7 +556,9 @@ components:
         dateOfBirth: { type: string, format: date }
         emailVerified:
           type: boolean
-          description: Giai đoạn 1 luôn `false` vì chưa gửi email xác minh; đăng nhập không đòi hỏi trường này.
+          description: |
+            Giai đoạn 1 luôn `false` vì chưa gửi email xác minh. Từ 0.6.0 (7d): true sau khi người dùng bấm liên kết trong thư xác minh
+            (`/v1/auth/email/verify`). Không bắt buộc: đăng nhập và mọi thao tác không đòi trường này, web chỉ nhắc.
         createdAt: { type: string, format: date-time }
 
     AdminUser:
@@ -624,6 +683,15 @@ components:
       properties:
         email: { type: string, format: email, maxLength: 254 }
 
+    VerifyEmailRequest:
+      type: object
+      required: [token]
+      properties:
+        token:
+          type: string
+          maxLength: 128
+          description: Mã trong liên kết của thư xác minh.
+
     ResetPasswordRequest:
       type: object
       required: [token, newPassword]
@@ -735,6 +803,9 @@ components:
             - self_action_forbidden
             - not_found
             - internal_error
+            - verification_token_invalid
+            - email_already_verified
+            - last_admin
         detail:
           type: string
           description: Thông báo tiếng Việt, hiển thị được cho người dùng.

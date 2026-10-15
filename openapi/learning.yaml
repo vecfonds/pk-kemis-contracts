@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: PkKemis learning
-  version: 0.3.1
+  version: 1.0.0
   summary: Nội dung học, bài tập, đề thi, chấm điểm, sổ cái XP, tiến độ, sổ tay lỗi sai, bảng xếp hạng.
   description: |
     Giai đoạn 1 (docs/backend/M3-LEARNING.md): bộ bài tập và đề thi, lượt làm bài do máy chủ chấm, XP, cấp độ, chuỗi ngày.
@@ -14,7 +14,18 @@ info:
     409 khi khóa sắp ra mắt (`course_coming_soon`) hoặc đề chưa mở (`exam_not_open`), như bắt đầu lượt làm; `ClassWorkResult.first` (tùy chọn);
     bản chụp câu tự soạn lưu theo từng bài (`workId`) chứ không toàn cục.
 
-    - Chỉ thêm, không xóa hay đổi nghĩa của trường đã phát hành.
+    1.0.0 (docs/backend/M7-DEBT-EMAIL.md). **Thay đổi phá vỡ có chủ đích** (chủ dự án duyệt kế hoạch giai đoạn 2 ngày 15/10/2026; chỉ web gọi
+    các đường này):
+    - Lát 7a: `GET /v1/exams/{examId}` chỉ còn cho giáo viên, admin (học sinh 403): đề chỉ đến học sinh cùng lượt làm. Với học sinh,
+      `ExamSummary.questionIds` vắng khi đề chưa mở (`upcoming`), và `PracticeCatalog.openExamQuestions` rỗng (đề bài của đề đang mở không
+      rời service). Đề `completed` tính là đang mở như `available` (khớp web).
+    - Lát 7b: gỡ `GET /internal/content/snapshot` (cùng schema `ContentSnapshot`): web đọc nội dung bằng token của người dùng. Service gỡ route
+      ở bước cuối của 7b, sau khi web đã thôi gọi.
+
+    Thêm (lát 7b): `GET /v1/content` (nội dung theo vai trò người gọi, một phản hồi, có ETag), `POST /v1/exam-overlap` (so một đoạn chữ với
+    đề bài của đề đang mở ở máy chủ), `ExamSummary.partCounts`, `ExamSummary.chapterIds`, ETag cho `GET /v1/bank/questions`.
+
+    - Từ 1.0.0 lại chỉ thêm, không xóa hay đổi nghĩa của trường đã phát hành.
     - Token là access token của identity (xem identity.yaml); service tự kiểm bằng khóa công khai, không gọi identity.
     - Chỉ học sinh làm bài và có XP; giáo viên và admin đọc được nội dung (403 ở các thao tác còn lại).
     - **Đáp án không rời service trước khi nộp:** đề gửi xuống không có đáp án và lời giải; bộ bài tập trả đáp án của từng câu
@@ -103,7 +114,10 @@ paths:
       tags: [content]
       operationId: listExams
       summary: Các đề thi
-      description: Từ 0.3.0 (L1) đọc từ nội dung admin soạn; đề đã gỡ không có. Hỗ trợ `If-None-Match`.
+      description: |
+        Từ 0.3.0 (L1) đọc từ nội dung admin soạn; đề đã gỡ không có. Hỗ trợ `If-None-Match`.
+        Từ 1.0.0 (7a): với học sinh, đề chưa mở (`upcoming`) không có `questionIds`; `questionCount`, `partCounts`, `chapterIds` vẫn có.
+        Phản hồi khác nhau giữa học sinh và giáo viên, admin nhưng cùng ETag cho một phiên bản: bên đệm giữ riêng theo vai trò.
       parameters:
         - { $ref: "#/components/parameters/IfNoneMatch" }
       responses:
@@ -127,14 +141,12 @@ paths:
     get:
       tags: [content]
       operationId: getExam
-      summary: Một đề thi kèm các câu hỏi (không có đáp án)
+      summary: Một đề thi kèm các câu hỏi, không có đáp án (giáo viên, admin)
       description: |
-        Từ 0.3.0 (L4) web không gọi thao tác này cho học sinh trước khi bắt đầu: đề đến cùng lượt làm (`OpenAttempt.questions`) để đồng hồ
-        chạy từ lúc thấy đề; trang giới thiệu dùng `ExamSummary`. Hạn chế thao tác này với học sinh là thay đổi phá vỡ, chờ chủ dự án
-        (docs/backend/M6-CONTENT.md, câu hỏi 8).
+        Từ 0.3.0 (L4) đề đến học sinh cùng lượt làm (`OpenAttempt.questions`) để đồng hồ chạy từ lúc thấy đề; trang giới thiệu dùng `ExamSummary`.
 
-        Từ 0.3.1: học sinh nhận 409 `exam_not_open` khi đề chưa đến giờ mở (`status` = upcoming) và 409 `course_coming_soon` khi khóa sắp
-        ra mắt, để không đọc được câu hỏi trước giờ; giáo viên và admin xem được (xem trước).
+        **Từ 1.0.0 (7a): chỉ giáo viên, admin (xem trước); học sinh 403 `forbidden`**, với mọi đề, kể cả đề đang mở (trước đó học sinh đọc được
+        đề đang mở, và nhận 409 với đề chưa mở hay khóa sắp ra mắt). Giáo viên, admin xem được cả đề chưa mở và đề của khóa sắp ra mắt.
       parameters:
         - { $ref: "#/components/parameters/ExamId" }
       responses:
@@ -144,12 +156,8 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ExamDetail" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/StaffOnly" }
         "404": { $ref: "#/components/responses/NotFound" }
-        "409":
-          description: Đề chưa mở (`exam_not_open`) hoặc khóa sắp ra mắt (`course_coming_soon`), với học sinh
-          content:
-            application/problem+json:
-              schema: { $ref: "#/components/schemas/Problem" }
 
   /v1/attempts:
     post:
@@ -570,6 +578,8 @@ paths:
       summary: Chương và đặc điểm của từng câu đang dùng (để lọc bài tập), câu của đề đang mở
       description: |
         Mọi vai trò. Không có đề bài hay đáp án, trừ `openExamQuestions` (đề bài của câu nằm trong đề đang mở, để Cộng đồng chặn đăng lại đề).
+        Từ 1.0.0 (7a): `openExamQuestions` gồm đề `available` và `completed`, và **rỗng với học sinh** (học sinh không đọc đề bài của đề trước
+        khi bắt đầu; so trùng với bài đăng chạy ở `POST /v1/exam-overlap`). Phản hồi khác nhau theo vai trò, cùng ETag: bên đệm giữ riêng.
       parameters:
         - { $ref: "#/components/parameters/IfNoneMatch" }
       responses:
@@ -583,6 +593,68 @@ paths:
         "304": { $ref: "#/components/responses/NotModified" }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
+  /v1/content:
+    get:
+      tags: [courses]
+      operationId: getContentView
+      x-slice: 7b
+      summary: Nội dung học như người gọi được đọc, trong một phản hồi (web dựng trang ở máy chủ)
+      description: |
+        Thay `GET /internal/content/snapshot` cho web: khóa, chương, bài kèm nội dung, Luyện tập nhanh, bộ bài tập, đề thi, câu không đáp án và
+        danh mục luyện tập, đúng như các đường đọc lẻ (`/v1/courses/**`, `/v1/exercise-sets/**`, `/v1/exams`, `/v1/practice-catalog`) trả cho
+        cùng người gọi. **Không có đáp án, lời giải với bất kì ai**; giáo viên, admin lấy đáp án ở `/v1/bank/**`, admin ở `/v1/admin/content`.
+
+        Phản hồi không theo từng người, chỉ theo vai trò (`audience`): một bản cho mọi học sinh, một bản cho mọi giáo viên và admin. ETag là
+        phiên bản nội dung, như mọi đường đọc nội dung; hai bản của cùng phiên bản có cùng ETag nên bên đệm phải giữ riêng theo `audience`
+        (learning gửi `Vary: Authorization`). Với học sinh:
+        - khóa sắp ra mắt chỉ có lộ trình: bài không có nội dung và Luyện tập nhanh, câu của khóa đó không có trong `questions`;
+        - đề chưa mở không có `questionIds`; `catalog.openExamQuestions` rỗng;
+        - câu chỉ nằm trong đề thi không có trong `questions` (đề chỉ đến cùng lượt làm).
+      parameters:
+        - { $ref: "#/components/parameters/IfNoneMatch" }
+      responses:
+        "200":
+          description: Nội dung
+          headers:
+            ETag: { $ref: "#/components/headers/ETag" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ContentView" }
+        "304": { $ref: "#/components/responses/NotModified" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/exam-overlap:
+    post:
+      tags: [courses]
+      operationId: checkExamOverlap
+      x-slice: 7b
+      summary: Một đoạn chữ có chép đề bài của câu thuộc đề đang mở không (Cộng đồng)
+      description: |
+        Để Cộng đồng chặn đăng lại đề đang mở mà đề bài không phải rời service (học sinh không được đọc trước khi bắt đầu đề). Mọi vai trò.
+        Luật như `copiesExamPrompt` của web (bản sao có chủ đích + script đối chiếu): sau khi chuẩn hóa chữ, đoạn chữ chứa nguyên đề bài (từ 20
+        kí tự trở lên) của một câu đang dùng trong đề `available` hoặc `completed` chưa gỡ. Chỉ trả có hay không, không nói câu nào, đề nào.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [text]
+              properties:
+                text: { type: string, maxLength: 20000, description: "Tiêu đề và thân bài đăng hoặc câu trả lời, ghép lại." }
+      responses:
+        "200":
+          description: Kết quả so
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [overlap]
+                properties:
+                  overlap: { type: boolean }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
   /v1/bank/questions:
     get:
       tags: [bank]
@@ -592,7 +664,9 @@ paths:
       description: |
         Giáo viên dùng để chọn câu cho bài của lớp và xem trước bộ, đề của PkKemis; học sinh 403. Mặc định không có câu đã nghỉ.
         `q` tìm trong đề bài, chủ đề và mã câu, không phân biệt hoa thường và dấu.
+        Từ 1.0.0 (7b): có `ETag` và nhận `If-None-Match` (304), để web đệm cả ngân hàng (`retired=include`) cho mọi giáo viên, admin.
       parameters:
+        - { $ref: "#/components/parameters/IfNoneMatch" }
         - { name: courseId, in: query, schema: { type: string } }
         - { name: chapterId, in: query, schema: { type: string } }
         - { name: lessonId, in: query, schema: { type: string } }
@@ -605,6 +679,8 @@ paths:
       responses:
         "200":
           description: Câu hỏi, theo khóa, chương rồi thứ tự trong ngân hàng
+          headers:
+            ETag: { $ref: "#/components/headers/ETag" }
           content:
             application/json:
               schema:
@@ -615,6 +691,7 @@ paths:
                   items:
                     type: array
                     items: { $ref: "#/components/schemas/BankQuestion" }
+        "304": { $ref: "#/components/responses/NotModified" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/StaffOnly" }
 
@@ -1402,31 +1479,6 @@ paths:
 
   # ------------------------------------------------------------------ 0.3.0: nội bộ
 
-  /internal/content/snapshot:
-    get:
-      tags: [internal]
-      operationId: getContentSnapshot
-      x-slice: L1
-      x-transitional: "Chỉ web dùng trong L1–L3; web thôi gọi ở L4, rồi gỡ."
-      summary: Toàn bộ nội dung đang dùng, kèm đáp án (web, tạm thời)
-      description: |
-        Để `getContent()` của web dựng lại đúng kiểu `Content` cũ trong khi trình chạy bài còn chấm ở trình duyệt. Gồm mọi câu (kể cả đã nghỉ,
-        mã trong `retired`), bộ và đề chưa bị gỡ. Hỗ trợ `If-None-Match`.
-      security:
-        - internalKey: []
-      parameters:
-        - { $ref: "#/components/parameters/IfNoneMatch" }
-      responses:
-        "200":
-          description: Nội dung
-          headers:
-            ETag: { $ref: "#/components/headers/ETag" }
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ContentSnapshot" }
-        "304": { $ref: "#/components/responses/NotModified" }
-        "403": { $ref: "#/components/responses/InternalForbidden" }
-
   /internal/catalog:
     get:
       tags: [internal]
@@ -1584,7 +1636,9 @@ components:
       type: apiKey
       in: header
       name: X-Internal-Key
-      description: Khóa dùng chung của learning (`LEARNING_INTERNAL_KEY`), chỉ service gọi nhau. Thay bằng token giữa service khi có gateway.
+      description: |
+        Khóa dùng chung của learning (`LEARNING_INTERNAL_KEY`), chỉ service gọi nhau (classroom). Từ 1.0.0 (7b) web không giữ khóa này. Thay
+        bằng token giữa service khi có gateway.
 
   headers:
     ETag:
@@ -1817,9 +1871,23 @@ components:
         questionIds:
           type: array
           items: { type: string }
-          description: 0.3.0. Mã các câu đang dùng, theo thứ tự (để đếm câu từng phần, chương đề bao phủ).
+          description: |
+            0.3.0. Mã các câu đang dùng, theo thứ tự (để đếm câu từng phần, chương đề bao phủ). Từ 1.0.0 (7a) vắng với học sinh khi đề chưa mở
+            (`upcoming`); dùng `partCounts`, `chapterIds`.
+        partCounts:
+          type: array
+          minItems: 3
+          maxItems: 3
+          items: { type: integer, minimum: 0 }
+          description: "1.0.0 (7b), luôn có từ lát đó: số câu đang dùng của phần I, II, III, kể cả khi `questionIds` vắng."
+        chapterIds:
+          type: array
+          uniqueItems: true
+          items: { type: string }
+          description: "1.0.0 (7b), luôn có từ lát đó: các chương có câu trong đề, theo thứ tự chương, kể cả khi `questionIds` vắng."
 
     ExamDetail:
+      description: Một đề kèm câu không đáp án; từ 1.0.0 chỉ giáo viên, admin nhận (xem trước).
       allOf:
         - type: object
           required: [id, title, durationMinutes, status, passPercent, questions]
@@ -2334,7 +2402,9 @@ components:
               lessonId: { type: string }
         openExamQuestions:
           type: array
-          description: Câu nằm trong đề đang mở (tình trạng `available`), kèm đề bài.
+          description: |
+            Câu nằm trong đề đang mở, kèm đề bài. Từ 1.0.0 (7a): đề đang mở là đề chưa gỡ có tình trạng `available` hoặc `completed` (trước chỉ
+            `available`); với học sinh luôn rỗng.
           items:
             type: object
             required: [id, prompt]
@@ -2578,32 +2648,89 @@ components:
         version: { $ref: "#/components/schemas/ContentVersion" }
         createdAt: { type: string, format: date-time }
 
-    ContentSnapshot:
+    LessonView:
+      description: "1.0.0 (7b): một bài trong `ContentView`, kèm nội dung và Luyện tập nhanh (chỉ mã câu)."
+      allOf:
+        - { $ref: "#/components/schemas/LessonOutline" }
+        - type: object
+          required: [content, practiceQuestionIds]
+          properties:
+            content:
+              type: array
+              description: Rỗng khi bài đang biên soạn (`written` false), và với học sinh khi khóa sắp ra mắt.
+              items: { $ref: "#/components/schemas/LessonBlock" }
+            practiceQuestionIds:
+              type: array
+              description: Câu đang dùng của Luyện tập nhanh, theo thứ tự admin đặt; mỗi câu có trong `ContentView.questions`. Rỗng với học sinh khi khóa sắp ra mắt.
+              items: { type: string }
+
+    CourseView:
+      description: "1.0.0 (7b): một khóa trong `ContentView`; như `CourseOutline` nhưng mỗi bài là `LessonView`."
       type: object
-      required: [version, courses, questions, retired, exerciseSets, exams]
+      required: [id, title, grade, description, comingSoon, chapters]
       properties:
-        version: { $ref: "#/components/schemas/ContentVersion" }
-        courses:
+        id: { type: string }
+        title: { type: string }
+        grade: { type: integer, minimum: 10, maximum: 12 }
+        description: { type: string }
+        comingSoon: { type: boolean }
+        author: { type: string, description: Người biên soạn; vắng khi chưa đặt. }
+        chapters:
           type: array
           items:
-            allOf:
-              - { $ref: "#/components/schemas/CourseDraft" }
-              - type: object
-                required: [grade]
-                properties:
-                  grade: { type: integer }
-        questions:
+            type: object
+            required: [id, order, title, lessons]
+            properties:
+              id: { type: string }
+              order: { type: integer, minimum: 1 }
+              title: { type: string }
+              lessons:
+                type: array
+                items: { $ref: "#/components/schemas/LessonView" }
+
+    ContentQuestion:
+      description: "1.0.0 (7b): câu không đáp án trong `ContentView`, kèm khóa của nó."
+      allOf:
+        - { $ref: "#/components/schemas/PublicQuestion" }
+        - type: object
+          required: [courseId]
+          properties:
+            courseId: { type: string }
+
+    ContentView:
+      description: |
+        1.0.0 (7b). Nội dung như người gọi được đọc trước khi trả lời (`GET /v1/content`); không có đáp án, lời giải. Không theo từng người, chỉ
+        theo vai trò.
+      type: object
+      required: [version, audience, courses, exerciseSets, exams, questions, catalog]
+      properties:
+        version: { $ref: "#/components/schemas/ContentVersion" }
+        audience:
+          type: string
+          enum: [student, staff]
+          description: "`student` với học sinh; `staff` với giáo viên và admin (xem được khóa sắp ra mắt, đề chưa mở)."
+        courses:
           type: array
-          description: Mọi câu, kể cả đã nghỉ.
-          items: { $ref: "#/components/schemas/Question" }
-        retired: { type: array, items: { type: string } }
+          description: Mọi khóa, theo khối rồi vị trí admin đặt, như `GET /v1/courses`.
+          items: { $ref: "#/components/schemas/CourseView" }
         exerciseSets:
           type: array
-          description: Bộ chưa bị gỡ; `questionIds` như đã lưu (chưa lọc câu nghỉ).
-          items: { $ref: "#/components/schemas/ExerciseSet" }
+          description: Như `GET /v1/exercise-sets`.
+          items: { $ref: "#/components/schemas/ExerciseSetSummary" }
         exams:
           type: array
-          items: { $ref: "#/components/schemas/Exam" }
+          description: Như `GET /v1/exams` cho cùng người gọi.
+          items: { $ref: "#/components/schemas/ExamSummary" }
+        questions:
+          type: array
+          description: |
+            Câu đang dùng của các bộ bài tập và Luyện tập nhanh của bài, mỗi câu một lần, không đáp án. Với học sinh chỉ của khóa đã ra mắt.
+            Câu chỉ nằm trong đề thi không có ở đây với bất kì ai (đề đến học sinh cùng lượt làm; giáo viên, admin dùng ngân hàng).
+          items: { $ref: "#/components/schemas/ContentQuestion" }
+        catalog:
+          description: Như `GET /v1/practice-catalog` cho cùng người gọi.
+          allOf:
+            - { $ref: "#/components/schemas/PracticeCatalog" }
 
     Catalog:
       type: object
