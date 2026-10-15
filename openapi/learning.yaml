@@ -547,8 +547,9 @@ paths:
       description: |
         Mọi vai trò. Câu đã nghỉ vẫn đọc được (`retired`). Câu giáo viên tự soạn (`tq-…`) không ở đây (404).
         Từ 0.3.1: câu của khóa sắp ra mắt thì học sinh nhận 409 `course_coming_soon`.
-      parameters:
-        - { $ref: "#/components/parameters/QuestionId" }
+        Từ 1.0.0 (7b): câu mà mọi nơi dùng nó đều là đề chưa mở (`upcoming`) thì học sinh nhận 409 `exam_not_open`, và câu đó cũng vắng khỏi
+        `PracticeCatalog.questions`, `PracticeCatalog.chapters[].questionCount` và `ContentView` của học sinh. Câu còn nằm trong bộ bài tập,
+        Luyện tập nhanh hoặc đề đang mở/đã xong thì đọc được. Giáo viên, admin không đổi.
       responses:
         "200":
           description: Câu hỏi
@@ -565,7 +566,7 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409":
-          description: Khóa sắp ra mắt (`course_coming_soon`), với học sinh
+          description: Khóa sắp ra mắt (`course_coming_soon`), hoặc câu chỉ thuộc đề chưa mở (`exam_not_open`, 1.0.0), với học sinh
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
