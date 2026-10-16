@@ -1,7 +1,7 @@
 asyncapi: 3.0.0
 info:
   title: PkKemis — sự kiện giữa các service
-  version: 0.3.0
+  version: 0.4.0
   description: |
     Hợp đồng sự kiện trên Kafka của PkKemis (docs/backend/M8-EVENTS.md). Cùng quy tắc với OpenAPI: **chỉ thêm, không xóa hay đổi nghĩa**.
 
@@ -22,6 +22,13 @@ info:
     `friend.removed`, `user.blocked`, `user.unblocked`; chưa ai nghe tới M11). `user.*` thêm `data.user.createdAt` (identity 0.8.0). Hai tài
     khoản Kafka mới: `social`, `classroom`. Quyền riêng tư của trang cá nhân ở social, nên `user.privacy_updated` vẫn chỉ có cờ ẩn khỏi bảng
     xếp hạng.
+
+    0.4.0 (M12, Cộng đồng; docs/backend/M12-COMMUNITY.md, chỉ thêm): `social.events` có người nghe. social phát `community.answer_accepted`
+    (người hỏi chọn một câu trả lời) và `community.reply_upvoted` (lần đầu một người tán thành một câu trả lời, bình luận), kèm `xpEligible` do
+    social quyết theo luật chống farm (lát `12e`); learning nghe (nhóm `learning`, lát `12b`) và ghi XP Cộng đồng với hai nguồn mới của
+    `XpSource`: `community_answer` (+20), `community_vote` (+2, tối đa 50 mỗi ngày), số XP và trần do learning giữ. social phát
+    `moderation.ban_requested` khi admin khóa tài khoản từ kiểm duyệt (lát `12c`); identity nghe (nhóm `identity`, lát `12f`, lần đầu identity
+    đọc Kafka) và khóa tài khoản. ACL: `learning`, `identity` đọc `social.events`, ghi `social.events.dlq`; nhóm đọc mới `identity`.
 
     **Phong bì:** mọi tin là một CloudEvent 1.0 dạng structured (cả phong bì là giá trị của bản ghi Kafka, JSON UTF-8), header
     `content-type: application/cloudevents+json; charset=UTF-8`. Khóa bản ghi là `subject` (mã người dùng), nên sự kiện của cùng một người
@@ -49,7 +56,7 @@ info:
     - name: classroom
       description: Thành viên lớp, bài giao, bài nộp
     - name: social
-      description: Bạn bè, chặn
+      description: Bạn bè, chặn; Cộng đồng (XP), kiểm duyệt (khóa tài khoản) từ 0.4.0
 
 defaultContentType: application/cloudevents+json
 
@@ -242,12 +249,18 @@ channels:
       Từ 0.3.0 (M10, lát 10b). Chỉ social ghi. Ở M10 chưa ai nghe (arena nghe từ M11 để biết bạn bè và chặn khi thách đấu, ghép trận), như
       `xp.awarded` ở M8. Khóa: với `friend.*` là mã nhỏ hơn của cặp (`data.userIds[0]`), nên mọi sự kiện của một cặp đến đúng thứ tự; với
       `user.blocked`, `user.unblocked` là người chặn.
-    x-acl: { write: [social], read: [] }
+      Từ 0.4.0 (M12): thêm `community.answer_accepted`, `community.reply_upvoted` (khóa = người nhận XP) và `moderation.ban_requested` (khóa =
+      người bị khóa). learning và identity đọc topic này (mỗi bên bỏ qua loại không phải của mình). Từ đây ai ghi được topic này là in được
+      XP (rồi Xu) và khóa được tài khoản: ACL bảo đảm chỉ social ghi.
+    x-acl: { write: [social], read: [learning, identity] }
     messages:
       friendAdded: { $ref: "#/components/messages/FriendAdded" }
       friendRemoved: { $ref: "#/components/messages/FriendRemoved" }
       userBlocked: { $ref: "#/components/messages/UserBlocked" }
       userUnblocked: { $ref: "#/components/messages/UserUnblocked" }
+      communityAnswerAccepted: { $ref: "#/components/messages/CommunityAnswerAccepted" }
+      communityReplyUpvoted: { $ref: "#/components/messages/CommunityReplyUpvoted" }
+      moderationBanRequested: { $ref: "#/components/messages/ModerationBanRequested" }
     bindings:
       kafka:
         topic: social.events
@@ -261,8 +274,8 @@ channels:
   socialEventsDlq:
     address: social.events.dlq
     title: Sự kiện của social mà một bên nghe bỏ cuộc
-    description: Như `identity.events.dlq`. Tạo sẵn ở M10 cho đồng bộ; có người ghi từ M11 (arena).
-    x-acl: { write: [], read: [] }
+    description: Như `identity.events.dlq`. Tạo sẵn ở M10 cho đồng bộ; có người ghi từ M12 (learning lát `12b`, identity lát `12f`), arena khi làm Đấu trường.
+    x-acl: { write: [learning, identity], read: [] }
     messages:
       deadLetter: { $ref: "#/components/messages/DeadLetter" }
     bindings:
@@ -635,6 +648,114 @@ operations:
     x-service: social
     x-slice: 10b
 
+  # ---------------------------------------------------------------- 0.4.0 (M12)
+
+  socialPublishesCommunityEvents:
+    action: send
+    channel: { $ref: "#/channels/socialEvents" }
+    title: social phát lần chọn câu trả lời và lần tán thành đầu tiên (XP Cộng đồng)
+    description: |
+      Ghi outbox là bước cuối của giao dịch chọn câu trả lời (đã khóa dòng câu hỏi) hay bỏ phiếu (đã khóa dòng câu trả lời). Cùng giao dịch,
+      social ghi một dòng quyết định XP (`community_accept_awards` mỗi câu hỏi một dòng; `community_vote_awards` mỗi người bỏ phiếu và câu trả
+      lời một dòng), nên mỗi nguyên nhân đúng một sự kiện. `community.reply_upvoted` chỉ cho lần tán thành **đầu tiên** của một người với một
+      câu (rút rồi tán thành lại không phát) và chỉ khi phiếu được tính (người bị tác giả chặn: không phát). `xpEligible` theo luật chống farm
+      của M12-COMMUNITY.md mục 8; số XP không có ở đây (learning giữ).
+    messages:
+      - $ref: "#/channels/socialEvents/messages/communityAnswerAccepted"
+      - $ref: "#/channels/socialEvents/messages/communityReplyUpvoted"
+    bindings:
+      kafka:
+        clientId: { type: string, const: social }
+        bindingVersion: "0.5.0"
+    x-service: social
+    x-slice: 12e
+
+  socialPublishesModerationEvents:
+    action: send
+    channel: { $ref: "#/channels/socialEvents" }
+    title: social đề nghị identity khóa tài khoản
+    description: |
+      Ghi outbox cùng giao dịch với dòng nhật ký `ban` (`moderation_actions`), sau khi kiểm người gọi là admin (token và bản sao `members`) và
+      người bị khóa không phải admin. Không có lý do chữ của admin, chỉ mã lý do.
+    messages:
+      - $ref: "#/channels/socialEvents/messages/moderationBanRequested"
+    bindings:
+      kafka:
+        clientId: { type: string, const: social }
+        bindingVersion: "0.5.0"
+    x-service: social
+    x-slice: 12c
+
+  learningReceivesCommunityEvents:
+    action: receive
+    channel: { $ref: "#/channels/socialEvents" }
+    title: learning ghi XP Cộng đồng
+    description: |
+      Nhóm đọc `learning` (bộ xử lý `learning.community`), từ đầu topic khi nhóm chưa có vị trí; bỏ qua `friend.*`, `user.*`,
+      `moderation.*` và loại lạ. Mỗi sự kiện một giao dịch: `processed_events`; kiểm `source` = `/social`, `subject` = người nhận XP
+      (`answererId`, `authorId`), sai thì DLQ `rejected`. `xpEligible: false`, người nhận không phải học sinh hay bị khóa theo bản sao `people`:
+      chỉ ghi nhận. Còn lại `XpLedger.award` (khóa XP của người đó): `community.answer_accepted` +20 nguồn `community_answer`, khóa chống lặp
+      `community_answer:<threadId>` (mỗi câu hỏi tối đa một lần, kể cả khi social lỡ gửi hai sự kiện đủ điều kiện), trần 60 XP mỗi ngày giờ Việt
+      Nam; `community.reply_upvoted` +2 nguồn `community_vote`, khóa `community_vote:<awardId>`, trần 50 XP mỗi ngày (phần vượt trần không cộng,
+      không bù). Hai nguồn này không tính là ngày học (chuỗi, mốc chuỗi). `xp.awarded` phát như mọi lần cộng XP (commerce đổi Xu theo cấu
+      hình của nó).
+    messages:
+      - $ref: "#/channels/socialEvents/messages/communityAnswerAccepted"
+      - $ref: "#/channels/socialEvents/messages/communityReplyUpvoted"
+    bindings:
+      kafka:
+        groupId: { type: string, const: learning }
+        clientId: { type: string, const: learning }
+        bindingVersion: "0.5.0"
+    x-service: learning
+    x-slice: 12b
+
+  learningDeadLettersSocialEvents:
+    action: send
+    channel: { $ref: "#/channels/socialEventsDlq" }
+    title: learning bỏ cuộc một sự kiện của social
+    messages:
+      - $ref: "#/channels/socialEventsDlq/messages/deadLetter"
+    bindings:
+      kafka:
+        clientId: { type: string, const: learning }
+        bindingVersion: "0.5.0"
+    x-service: learning
+    x-slice: 12b
+
+  identityReceivesModerationEvents:
+    action: receive
+    channel: { $ref: "#/channels/socialEvents" }
+    title: identity khóa tài khoản theo đề nghị của kiểm duyệt
+    description: |
+      Nhóm đọc `identity` (mới; Spring Kafka như commerce, bảng `processed_events` cùng cột M8 mục 6), từ đầu topic khi nhóm chưa có vị trí;
+      bỏ qua mọi loại khác `moderation.ban_requested`. Mỗi sự kiện một giao dịch: `processed_events`; kiểm `source` = `/social`, `subject` =
+      `data.userId`, `requestedBy` đang là admin; người bị khóa là admin (hay admin cuối cùng) thì DLQ `rejected`. Tài khoản đã khóa: chỉ ghi
+      nhận. Còn lại khóa như `POST /v1/admin/users/{userId}/lock` (thu hồi refresh token, `version` + 1, phát `user.locked` cùng giao dịch),
+      nhật ký `ACCOUNT_LOCKED` với người làm là `requestedBy`, `detail.source = community`, `moderationActionId`, `reasonCode`.
+    messages:
+      - $ref: "#/channels/socialEvents/messages/moderationBanRequested"
+    bindings:
+      kafka:
+        groupId: { type: string, const: identity }
+        clientId: { type: string, const: identity }
+        bindingVersion: "0.5.0"
+    x-service: identity
+    x-slice: 12f
+
+  identityDeadLettersSocialEvents:
+    action: send
+    channel: { $ref: "#/channels/socialEventsDlq" }
+    title: identity bỏ cuộc một sự kiện của social
+    messages:
+      - $ref: "#/channels/socialEventsDlq/messages/deadLetter"
+    bindings:
+      kafka:
+        clientId: { type: string, const: identity }
+        bindingVersion: "0.5.0"
+    x-service: identity
+    x-slice: 12f
+
 components:
   securitySchemes:
     kafkaScram:
@@ -925,6 +1046,26 @@ components:
               source: class_work
               refId: 5c6d7e8f-9a0b-4c1d-8e2f-3a4b5c6d7e8f
               awardedAt: "2026-10-16T13:00:41.550Z"
+        - name: cauTraLoiDuocChon
+          summary: "0.4.0 (M12): câu trả lời được người hỏi chọn, +20 XP Cộng đồng (`refId` là câu trả lời, `itemId` là bài)"
+          headers:
+            content-type: application/cloudevents+json; charset=UTF-8
+          payload:
+            specversion: "1.0"
+            id: 8f9a0b1c-2d3e-4f4a-9b5c-6d7e8f9a0b1c
+            source: /learning
+            type: xp.awarded
+            time: "2026-10-16T12:30:01.120Z"
+            subject: 8c9d0e1f-2a3b-4c4d-9e5f-6a7b8c9d0e1f
+            datacontenttype: application/json
+            data:
+              awardId: 8f9a0b1c-2d3e-4f4a-9b5c-6d7e8f9a0b1c
+              userId: 8c9d0e1f-2a3b-4c4d-9e5f-6a7b8c9d0e1f
+              amount: 20
+              source: community_answer
+              refId: 2d3e4f5a-6b7c-4d8e-9f0a-1b2c3d4e5f6a
+              awardedAt: "2026-10-16T12:30:01.120Z"
+              itemId: 0b1c2d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e
 
     WalletChanged:
       name: wallet.changed
@@ -1547,6 +1688,161 @@ components:
               blockedId: 3f1c9a52-7b1e-4d8a-9c41-0e5b2d7f6a10
               at: "2026-10-22T08:00:00.000Z"
 
+    # -------------------------------------------------------------- 0.4.0 (M12)
+
+    CommunityAnswerAccepted:
+      name: community.answer_accepted
+      title: Câu trả lời được người hỏi chọn
+      summary: |
+        Người hỏi chọn (hay đổi sang) một câu trả lời làm câu trả lời hay nhất. Mỗi lần chọn một sự kiện; `xpEligible` chỉ có thể đúng ở lần
+        chọn đầu tiên của mỗi câu hỏi. `subject` = người trả lời (người nhận XP). Không có mã người hỏi, không có chữ của bài.
+      contentType: application/cloudevents+json
+      headers: { $ref: "#/components/schemas/EventHeaders" }
+      payload: { $ref: "#/components/schemas/CommunityAnswerAcceptedEvent" }
+      bindings:
+        kafka:
+          key: { $ref: "#/components/schemas/UserKey" }
+          bindingVersion: "0.5.0"
+      x-producer: social
+      x-consumers: [learning]
+      x-slice: 12e
+      examples:
+        - name: chonLanDau
+          summary: Minh Anh chọn câu trả lời của Gia Huy (lần chọn đầu của câu hỏi)
+          headers:
+            content-type: application/cloudevents+json; charset=UTF-8
+          payload:
+            specversion: "1.0"
+            id: 019a2b01-1c2d-7e3f-8a4b-5c6d7e8f9a01
+            source: /social
+            type: community.answer_accepted
+            time: "2026-10-16T12:30:00.000Z"
+            subject: 8c9d0e1f-2a3b-4c4d-9e5f-6a7b8c9d0e1f
+            datacontenttype: application/json
+            data:
+              threadId: 0b1c2d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e
+              replyId: 2d3e4f5a-6b7c-4d8e-9f0a-1b2c3d4e5f6a
+              answererId: 8c9d0e1f-2a3b-4c4d-9e5f-6a7b8c9d0e1f
+              acceptedAt: "2026-10-16T12:30:00.000Z"
+              xpEligible: true
+              ineligibleReason: null
+        - name: doiLuaChon
+          summary: Người hỏi đổi sang câu trả lời khác (không còn XP cho câu hỏi này)
+          headers:
+            content-type: application/cloudevents+json; charset=UTF-8
+          payload:
+            specversion: "1.0"
+            id: 019a2b02-2d3e-7f40-9b5c-6d7e8f9a0b12
+            source: /social
+            type: community.answer_accepted
+            time: "2026-10-16T13:05:00.000Z"
+            subject: 5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c8d
+            datacontenttype: application/json
+            data:
+              threadId: 0b1c2d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e
+              replyId: 7e8f9a0b-1c2d-4e3f-8a4b-5c6d7e8f9a0b
+              answererId: 5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c8d
+              acceptedAt: "2026-10-16T13:05:00.000Z"
+              xpEligible: false
+              ineligibleReason: repeat
+
+    CommunityReplyUpvoted:
+      name: community.reply_upvoted
+      title: Câu trả lời, bình luận nhận một phiếu tán thành mới
+      summary: |
+        Lần **đầu tiên** một người tán thành một câu trả lời hay bình luận (rút rồi tán thành lại không phát), và phiếu được tính. `subject` =
+        tác giả (người nhận XP). `awardId` là mã quyết định của cặp (người bỏ phiếu, câu), không lộ ai bỏ phiếu. `score` là điểm (tán thành trừ
+        không tán thành) sau phiếu này, để dành cho thành tích Cộng đồng sau này.
+      contentType: application/cloudevents+json
+      headers: { $ref: "#/components/schemas/EventHeaders" }
+      payload: { $ref: "#/components/schemas/CommunityReplyUpvotedEvent" }
+      bindings:
+        kafka:
+          key: { $ref: "#/components/schemas/UserKey" }
+          bindingVersion: "0.5.0"
+      x-producer: social
+      x-consumers: [learning]
+      x-slice: 12e
+      examples:
+        - name: tanThanh
+          summary: Câu trả lời của Gia Huy nhận phiếu tán thành thứ 5
+          headers:
+            content-type: application/cloudevents+json; charset=UTF-8
+          payload:
+            specversion: "1.0"
+            id: 019a2b03-3e4f-7a50-8c6d-7e8f9a0b1c23
+            source: /social
+            type: community.reply_upvoted
+            time: "2026-10-16T12:40:00.000Z"
+            subject: 8c9d0e1f-2a3b-4c4d-9e5f-6a7b8c9d0e1f
+            datacontenttype: application/json
+            data:
+              awardId: 9a0b1c2d-3e4f-4a5b-8c6d-7e8f9a0b1c2d
+              threadId: 0b1c2d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e
+              replyId: 2d3e4f5a-6b7c-4d8e-9f0a-1b2c3d4e5f6a
+              authorId: 8c9d0e1f-2a3b-4c4d-9e5f-6a7b8c9d0e1f
+              upvotedAt: "2026-10-16T12:40:00.000Z"
+              score: 5
+              xpEligible: true
+              ineligibleReason: null
+        - name: nguoiBoPhieuMoi
+          summary: Người bỏ phiếu có tài khoản dưới 7 ngày (phiếu vẫn tính vào điểm, không có XP)
+          headers:
+            content-type: application/cloudevents+json; charset=UTF-8
+          payload:
+            specversion: "1.0"
+            id: 019a2b04-4f5a-7b61-9d7e-8f9a0b1c2d34
+            source: /social
+            type: community.reply_upvoted
+            time: "2026-10-16T12:45:00.000Z"
+            subject: 8c9d0e1f-2a3b-4c4d-9e5f-6a7b8c9d0e1f
+            datacontenttype: application/json
+            data:
+              awardId: 0b1c2d3e-4f5a-4b6c-9d7e-8f9a0b1c2d3e
+              threadId: 0b1c2d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e
+              replyId: 2d3e4f5a-6b7c-4d8e-9f0a-1b2c3d4e5f6a
+              authorId: 8c9d0e1f-2a3b-4c4d-9e5f-6a7b8c9d0e1f
+              upvotedAt: "2026-10-16T12:45:00.000Z"
+              score: 6
+              xpEligible: false
+              ineligibleReason: voter_new_account
+
+    ModerationBanRequested:
+      name: moderation.ban_requested
+      title: Kiểm duyệt đề nghị khóa tài khoản
+      summary: |
+        Admin chọn "Khóa tài khoản" ở trang kiểm duyệt Cộng đồng. identity khóa (như khóa bằng tay ở `/admin/users`). `subject` = người bị
+        khóa. Chỉ mã lý do; lời admin viết không bao giờ đi vào sự kiện.
+      contentType: application/cloudevents+json
+      headers: { $ref: "#/components/schemas/EventHeaders" }
+      payload: { $ref: "#/components/schemas/ModerationBanRequestedEvent" }
+      bindings:
+        kafka:
+          key: { $ref: "#/components/schemas/UserKey" }
+          bindingVersion: "0.5.0"
+      x-producer: social
+      x-consumers: [identity]
+      x-slice: 12c
+      examples:
+        - name: khoaTaiKhoan
+          summary: Khóa một tài khoản đăng nội dung người lớn nhiều lần
+          headers:
+            content-type: application/cloudevents+json; charset=UTF-8
+          payload:
+            specversion: "1.0"
+            id: 019a2b05-5a6b-7c72-8e8f-9a0b1c2d3e45
+            source: /social
+            type: moderation.ban_requested
+            time: "2026-10-17T02:00:00.000Z"
+            subject: 6d7e8f9a-0b1c-4d2e-8f3a-4b5c6d7e8f9a
+            datacontenttype: application/json
+            data:
+              actionId: 1e2f3a4b-5c6d-4e7f-9a8b-0c1d2e3f4a5b
+              userId: 6d7e8f9a-0b1c-4d2e-8f3a-4b5c6d7e8f9a
+              requestedBy: 2f3a4b5c-6d7e-4f8a-9b0c-1d2e3f4a5b6c
+              reasonCode: adult
+              requestedAt: "2026-10-17T02:00:00.000Z"
+
     DeadLetter:
       name: dead_letter
       title: Bản ghi bị bỏ cuộc
@@ -1737,11 +2033,13 @@ components:
 
     XpSource:
       type: string
-      enum: [exercise, exam, lesson, lesson_practice, quick, review, class_work]
+      enum: [exercise, exam, lesson, lesson_practice, quick, review, class_work, community_answer, community_vote]
       description: |
         Nguồn XP, bằng `xp_events.source`: `exercise` bộ bài tập, `exam` đề, `lesson` hoàn thành bài học (+50), `lesson_practice` Luyện tập
         nhanh của bài, `quick` luyện nhanh, `review` ôn sổ lỗi sai, `class_work` bài của lớp (classroom gửi qua `/internal/class-work-results`).
-        Sau này thêm `arena`, `community` (bản thêm). Bên nghe gặp giá trị lạ thì bỏ qua sự kiện và ghi log (commerce không đổi XP lạ ra Xu).
+        0.4.0 (M12, lát `12b`): `community_answer` câu trả lời được người hỏi chọn (+20), `community_vote` câu trả lời, bình luận được tán thành
+        (+2, tối đa 50 mỗi ngày); learning ghi từ `social.events`. Sau này thêm `arena` (bản thêm). Bên nghe gặp giá trị lạ thì bỏ qua sự kiện
+        và ghi log (commerce không đổi XP lạ ra Xu).
 
     XpAwardedData:
       type: object
@@ -1768,6 +2066,7 @@ components:
           description: |
             0.2.0 (lát 9a, tùy chọn): mã thứ người học làm (bộ bài tập, đề, bài học, bài của lớp), khác `refId` (mã lượt làm). Có khi learning biết:
             `exercise`, `exam`: mã bộ hay đề; `lesson`, `lesson_practice`: mã bài học; `class_work`: mã bài của lớp. `quick`, `review`: không có.
+            `community_answer`, `community_vote` (0.4.0): mã bài Cộng đồng (`refId` là câu trả lời, bình luận).
             Commerce chép sang dòng sổ cái để web hiện tên ("Bộ bài tập · …") mà commerce không cần biết tên.
 
     UserRegisteredEvent:
@@ -2198,3 +2497,87 @@ components:
             type: { const: user.unblocked }
             source: { const: /social }
             data: { $ref: "#/components/schemas/UserBlockData" }
+
+    # ---------------------------------------------------------------- 0.4.0 (M12)
+
+    CommunityAnswerAcceptedData:
+      type: object
+      additionalProperties: false
+      required: [threadId, replyId, answererId, acceptedAt, xpEligible, ineligibleReason]
+      properties:
+        threadId: { type: string, format: uuid, description: Câu hỏi. learning chống cộng hai lần theo mã này (`community_answer:<threadId>`). }
+        replyId: { type: string, format: uuid, description: Câu trả lời được chọn. }
+        answererId: { type: string, format: uuid, description: Người trả lời; bằng `subject`. }
+        acceptedAt: { type: string, format: date-time }
+        xpEligible:
+          type: boolean
+          description: social quyết lần chọn này có được XP không (M12-COMMUNITY.md mục 8); learning chỉ cộng khi true, theo số và trần của nó.
+        ineligibleReason:
+          type: [string, "null"]
+          enum: [repeat, not_student, pair_limit, null]
+          description: |
+            Null khi `xpEligible`. `repeat`: câu hỏi đã có lần chọn trước (chỉ lần đầu có XP); `not_student`: người trả lời là giáo viên hay
+            admin; `pair_limit`: cùng người hỏi đã cho cùng người trả lời một lần chọn có XP trong 7 ngày.
+
+    CommunityReplyUpvotedData:
+      type: object
+      additionalProperties: false
+      required: [awardId, threadId, replyId, authorId, upvotedAt, score, xpEligible, ineligibleReason]
+      properties:
+        awardId:
+          type: string
+          format: uuid
+          description: Mã quyết định của cặp (người bỏ phiếu, câu), duy nhất mãi; learning chống cộng hai lần theo mã này (`community_vote:<awardId>`).
+        threadId: { type: string, format: uuid }
+        replyId: { type: string, format: uuid }
+        authorId: { type: string, format: uuid, description: "Tác giả câu trả lời, bình luận; bằng `subject`." }
+        upvotedAt: { type: string, format: date-time }
+        score: { type: integer, description: Tán thành trừ không tán thành sau phiếu này. }
+        xpEligible: { type: boolean }
+        ineligibleReason:
+          type: [string, "null"]
+          enum: [not_student, voter_new_account, pair_limit, null]
+          description: |
+            Null khi `xpEligible`. `not_student`: tác giả là giáo viên hay admin; `voter_new_account`: người bỏ phiếu có tài khoản dưới 7 ngày;
+            `pair_limit`: người bỏ phiếu đã cho tác giả này 5 phiếu có XP hôm nay (giờ Việt Nam).
+
+    ModerationBanRequestedData:
+      type: object
+      additionalProperties: false
+      required: [actionId, userId, requestedBy, reasonCode, requestedAt]
+      properties:
+        actionId: { type: string, format: uuid, description: Mã dòng nhật ký `ban` ở social; identity ghi vào `detail.moderationActionId`. }
+        userId: { type: string, format: uuid, description: Người bị khóa; bằng `subject`. }
+        requestedBy: { type: string, format: uuid, description: Admin bấm khóa (identity kiểm người này còn là admin). }
+        reasonCode:
+          type: string
+          enum: [offensive, bullying, adult, spam, cheating, wrong_chemistry, personal_info, other]
+          description: Như `ReportReason` của social.yaml. Không có lời admin viết.
+        requestedAt: { type: string, format: date-time }
+
+    CommunityAnswerAcceptedEvent:
+      allOf:
+        - $ref: "#/components/schemas/CloudEventEnvelope"
+        - type: object
+          properties:
+            type: { const: community.answer_accepted }
+            source: { const: /social }
+            data: { $ref: "#/components/schemas/CommunityAnswerAcceptedData" }
+
+    CommunityReplyUpvotedEvent:
+      allOf:
+        - $ref: "#/components/schemas/CloudEventEnvelope"
+        - type: object
+          properties:
+            type: { const: community.reply_upvoted }
+            source: { const: /social }
+            data: { $ref: "#/components/schemas/CommunityReplyUpvotedData" }
+
+    ModerationBanRequestedEvent:
+      allOf:
+        - $ref: "#/components/schemas/CloudEventEnvelope"
+        - type: object
+          properties:
+            type: { const: moderation.ban_requested }
+            source: { const: /social }
+            data: { $ref: "#/components/schemas/ModerationBanRequestedData" }

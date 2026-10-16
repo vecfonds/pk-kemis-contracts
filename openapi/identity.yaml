@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: PkKemis identity
-  version: 0.8.0
+  version: 0.9.0
   summary: Tài khoản, đăng nhập, token và vai trò.
   description: |
     Đã được chủ dự án duyệt ngày 13/10/2026 (docs/backend/M1-IDENTITY.md).
@@ -23,6 +23,12 @@ info:
     `user.registered` chỉ giữ 7 ngày). Sự kiện `user.*` thêm `data.user.createdAt` (asyncapi/pkkemis.yaml 0.3.0). Quyền riêng tư của trang cá
     nhân (ai xem tiến độ, thành tích, danh sách bạn; ai gửi lời mời, nhắn tin, trả lời) nằm ở social (`social.yaml` `/v1/me/privacy`); identity
     chỉ giữ "ẩn khỏi bảng xếp hạng" như từ 0.5.0.
+
+    0.9.0 (docs/backend/M12-COMMUNITY.md, lát `12f`, chỉ thêm): identity **nghe** sự kiện lần đầu: `moderation.ban_requested` trên
+    `social.events` (asyncapi/pkkemis.yaml 0.4.0; nhóm đọc `identity`). Khi admin khóa tài khoản từ trang kiểm duyệt Cộng đồng, social gửi sự
+    kiện này; identity khóa như `POST /v1/admin/users/{userId}/lock` (thu hồi mọi refresh token, phát `user.locked`), người làm là admin trong
+    sự kiện (phải còn là admin), lý do ghi "Vi phạm quy tắc Cộng đồng", và `AuditLogEntry.detail` có `source: community`,
+    `moderationActionId`, `reasonCode`. Không khóa admin; tài khoản đã khóa thì không làm gì. Không thao tác REST nào đổi hành vi hay phản hồi.
 
     - Chỉ thêm, không xóa hay đổi nghĩa của trường đã phát hành.
     - Từ 0.3.0 các thao tác admin (`/v1/admin/*`) đã được cài (lát D của M4); `x-phase: 2` còn lại, nếu có, là thao tác chưa cài.
@@ -633,7 +639,10 @@ components:
         action: { type: string, enum: [ROLE_CHANGED, ACCOUNT_LOCKED, ACCOUNT_UNLOCKED] }
         detail:
           type: [object, "null"]
-          description: Với ROLE_CHANGED có `from` và `to`.
+          description: |
+            Với ROLE_CHANGED có `from` và `to`. Từ 0.9.0, ACCOUNT_LOCKED do kiểm duyệt Cộng đồng (sự kiện `moderation.ban_requested`) có
+            `source: community`, `moderationActionId` (mã lần xử lý ở social) và `reasonCode` (mã lý do, như `ReportReason` của social.yaml);
+            khóa bằng tay ở `/admin/users` không có các trường này.
         reason: { type: string }
         createdAt: { type: string, format: date-time }
 

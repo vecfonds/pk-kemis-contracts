@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: PkKemis learning
-  version: 1.2.0
+  version: 1.3.0
   summary: Nội dung học, bài tập, đề thi, chấm điểm, sổ cái XP, tiến độ, sổ tay lỗi sai, bảng xếp hạng.
   description: |
     Giai đoạn 1 (docs/backend/M3-LEARNING.md): bộ bài tập và đề thi, lượt làm bài do máy chủ chấm, XP, cấp độ, chuỗi ngày.
@@ -36,6 +36,13 @@ info:
     đạt theo trang (dựng lại bản sao của social). learning phát thêm `level.changed`, `achievement.unlocked`, `streak.milestone`,
     `chapter.completed` (asyncapi/pkkemis.yaml 0.3.0). Phần riêng tư (độ chính xác, chủ đề nên ôn, thời gian học) chỉ có ở `/v1/me/**`, không
     bao giờ ở đường nội bộ.
+
+    1.3.0 (docs/backend/M12-COMMUNITY.md, chỉ thêm): Cộng đồng ở social. Thêm đường nội bộ `POST /internal/community/screen` (khóa `socialKey`,
+    lát `12b`): social hỏi trước khi lưu mỗi bài, câu trả lời: đoạn chữ có chép đề bài của đề đang mở không (cùng luật `POST /v1/exam-overlap`),
+    bài học, chương, câu được gắn có thật và mở với người viết không, câu đó có nằm trong đề đang mở không. Đề bài không rời learning. learning
+    nghe thêm `social.events` (`community.answer_accepted`, `community.reply_upvoted`; asyncapi/pkkemis.yaml 0.4.0) và ghi XP Cộng đồng với hai
+    nguồn mới `community_answer` (+20) và `community_vote` (+2, tối đa 50 mỗi ngày); hai nguồn này không tính là ngày học (chuỗi ngày, mốc chuỗi).
+    Không thao tác REST công khai nào đổi.
 
     - Từ 1.0.0 lại chỉ thêm, không xóa hay đổi nghĩa của trường đã phát hành.
     - Token là access token của identity (xem identity.yaml); service tự kiểm bằng khóa công khai, không gọi identity.
@@ -1894,6 +1901,86 @@ paths:
         "400": { $ref: "#/components/responses/ValidationFailed" }
         "403": { $ref: "#/components/responses/InternalForbidden" }
 
+  # ------------------------------------------------------------------ 1.3.0: nội bộ cho social (M12)
+
+  /internal/community/screen:
+    post:
+      tags: [internal]
+      operationId: screenCommunityPost
+      x-slice: 12b
+      x-callers: [social]
+      summary: Kiểm một bài Cộng đồng trước khi social lưu (đề đang mở, nội dung được gắn)
+      description: |
+        social gọi trước khi lưu mỗi bài, câu trả lời, bình luận (docs/backend/M12-COMMUNITY.md mục 6), hạn 1,5 giây; không trả lời thì social
+        giữ bài chờ duyệt. learning không lưu gì, không biết ai viết (chỉ biết vai trò `audience`).
+        - `examOverlap`: cùng luật với `POST /v1/exam-overlap` (`copiesExamPrompt` của web, script đối chiếu): đoạn chữ chứa nguyên đề bài (từ
+          20 kí tự sau khi chuẩn hóa) của một câu đang dùng trong đề `available` hay `completed` chưa gỡ. Không nói câu nào, đề nào.
+        - `refs`: bài học (`lessonId`) có thật thì trả chương và khóa của nó; không có bài học thì chương (`chapterId`) và khóa của nó; câu
+          (`questionId`) có thật, kèm chương và khóa của câu. Với `audience: student`, khóa sắp ra mắt và câu chỉ nằm trong đề chưa mở
+          (`upcoming`) tính là không có (`not_available`), như `GET /v1/questions/{id}` trả 409 cho học sinh. `questionInOpenExam`: câu nằm trong
+          một đề `available` hay `completed` chưa gỡ (web cũng ẩn nút "Hỏi về câu này" với các câu đó).
+        Chỉ khóa `socialKey`.
+      security:
+        - socialKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [audience, text]
+              properties:
+                audience: { type: string, enum: [student, staff], description: "Vai trò của người viết: `staff` là giáo viên, admin." }
+                text: { type: string, minLength: 1, maxLength: 20000, description: "Tiêu đề và thân, ghép lại." }
+                courseId: { type: string, maxLength: 100 }
+                chapterId: { type: string, maxLength: 100 }
+                lessonId: { type: string, maxLength: 100 }
+                questionId: { type: string, maxLength: 100 }
+            example:
+              audience: student
+              text: "Câu này mình chưa hiểu\nCho phản ứng Fe₂O₃ + CO → Fe + CO₂, hệ số của CO là bao nhiêu?"
+              lessonId: can-bang-thang-bang-electron
+              questionId: c4-can-bang-fe2o3
+      responses:
+        "200":
+          description: Kết quả kiểm
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [examOverlap, refs]
+                properties:
+                  examOverlap: { type: boolean }
+                  refs:
+                    type: object
+                    additionalProperties: false
+                    required: [valid, problem, courseId, chapterId, lessonId, questionId, questionInOpenExam]
+                    properties:
+                      valid: { type: boolean, description: Mọi mã gửi lên đều có thật và mở với người viết. Không gửi mã nào thì true. }
+                      problem:
+                        type: [string, "null"]
+                        enum: [unknown_course, unknown_chapter, unknown_lesson, unknown_question, not_available, null]
+                        description: Mã đầu tiên có vấn đề (social trả 400 với trường tương ứng).
+                      courseId: { type: [string, "null"] }
+                      chapterId: { type: [string, "null"], description: "Chương của bài học, hay của câu khi không có bài học, hay chương gửi lên." }
+                      lessonId: { type: [string, "null"] }
+                      questionId: { type: [string, "null"] }
+                      questionInOpenExam: { type: boolean }
+              example:
+                examOverlap: false
+                refs:
+                  valid: true
+                  problem: null
+                  courseId: hoa-hoc-10
+                  chapterId: c4
+                  lessonId: can-bang-thang-bang-electron
+                  questionId: c4-can-bang-fe2o3
+                  questionInOpenExam: true
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "403": { $ref: "#/components/responses/InternalForbidden" }
+
 components:
   securitySchemes:
     bearerAuth:
@@ -1914,8 +2001,9 @@ components:
       name: X-Internal-Key
       description: |
         1.2.0 (M10): khóa riêng của social (`LEARNING_INTERNAL_KEY_SOCIAL`), chỉ mở bốn đường `x-callers: [social]` (tiến độ chia sẻ, XP của
-        một nhóm, cấp độ, thành tích đã đạt). Khóa của classroom (`internalKey`) không vào được các đường này, khóa của social không vào được
-        các đường của classroom (như khóa theo bên gọi của commerce). Khóa trống thì không ai vào được. So sánh thời gian hằng.
+        một nhóm, cấp độ, thành tích đã đạt); từ 1.3.0 (M12) thêm đường thứ năm `POST /internal/community/screen`. Khóa của classroom
+        (`internalKey`) không vào được các đường này, khóa của social không vào được các đường của classroom (như khóa theo bên gọi của
+        commerce). Khóa trống thì không ai vào được. So sánh thời gian hằng.
 
   headers:
     ETag:

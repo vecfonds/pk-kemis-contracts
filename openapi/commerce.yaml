@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: PkKemis commerce
-  version: 0.2.0
+  version: 0.3.0
   summary: Ví Xu và sổ cái, cửa hàng khung và rương, nạp Xu (thanh toán mô phỏng), thu Xu cho service khác (mua thêm lượt làm bài).
   description: |
     0.1.0 (docs/backend/M9-COMMERCE.md): service mới, Spring Boot. Mỗi thao tác ghi lát cài nó ở `x-slice` (`9a` ví và sổ cái, `9b` cửa hàng,
@@ -10,6 +10,11 @@ info:
     0.2.0 (docs/backend/M10-SOCIAL.md, lát 10a, chỉ thêm): social cũng đọc `GET /internal/frames/equipped` (bản sao khung để vẽ khung ở trang
     cá nhân, danh sách bạn, thông báo) bằng khóa riêng `COMMERCE_INTERNAL_KEY_SOCIAL`, chỉ được đường này. social nghe `order.paid` và
     `wallet.changed` (loại `adjustment`) để thông báo; không có gì về tiền đổi.
+
+    0.3.0 (docs/backend/M12-COMMUNITY.md, lát `12g`, chỉ thêm): `XpSource` thêm `community_answer` (câu trả lời được người hỏi chọn) và
+    `community_vote` (câu trả lời, bình luận được tán thành), hai nguồn XP Cộng đồng learning ghi từ M12. commerce đổi chúng ra Xu như các
+    nguồn khác (cấu hình `COMMERCE_XP_SOURCES`; PHASE2 câu 5, chờ chủ dự án xác nhận ở M12-COMMUNITY.md câu 11). Dòng `earn` của hai nguồn này
+    có `itemId` là mã bài Cộng đồng (web dẫn tới `/community/threads/<itemId>`).
 
     - Token là access token của identity (xem identity.yaml); service tự kiểm bằng khóa công khai (JWKS), không gọi identity. Người dùng là
       `sub` của token, **không bao giờ** lấy từ thân yêu cầu.
@@ -877,8 +882,8 @@ components:
 
     XpSource:
       type: string
-      enum: [exercise, exam, lesson, lesson_practice, quick, review, class_work]
-      description: Như `XpSource` của asyncapi/pkkemis.yaml.
+      enum: [exercise, exam, lesson, lesson_practice, quick, review, class_work, community_answer, community_vote]
+      description: Như `XpSource` của asyncapi/pkkemis.yaml (`community_answer`, `community_vote` từ 0.3.0). Bên đọc gặp giá trị lạ thì hiện nhãn chung.
 
     LedgerEntry:
       type: object

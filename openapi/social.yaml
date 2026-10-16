@@ -1,13 +1,33 @@
 openapi: 3.1.0
 info:
   title: PkKemis social
-  version: 0.1.0
-  summary: Bạn bè, lời mời, chặn, quyền riêng tư của trang cá nhân, trang cá nhân người khác, bảng xếp hạng bạn bè, thông báo.
+  version: 0.2.0
+  summary: Bạn bè, lời mời, chặn, quyền riêng tư của trang cá nhân, trang cá nhân người khác, bảng xếp hạng bạn bè, thông báo, Cộng đồng, kiểm duyệt, ảnh.
   description: |
     0.1.0 (docs/backend/M10-SOCIAL.md): service mới, NestJS. Phần 1 của social (PHASE2 M10): bạn bè, cổ vũ, chặn, quyền riêng tư của trang
     cá nhân, trang cá nhân người khác (đã lọc theo quyền ở máy chủ), bảng xếp hạng bạn bè, "Bạn bè gần đây", thông báo trong app (hỏi lại
-    định kỳ, chưa đẩy thời gian thực), thông báo chung của admin. Cộng đồng, kiểm duyệt, ảnh (M12) và tin nhắn, WebSocket (M13) chưa có ở
-    đây. Mỗi thao tác ghi lát cài nó ở `x-slice` (`10a`…`10i`); trước lát đó thao tác chưa có.
+    định kỳ, chưa đẩy thời gian thực), thông báo chung của admin. Tin nhắn, WebSocket (M13) chưa có ở đây. Mỗi thao tác ghi lát cài nó ở
+    `x-slice` (`10a`…`10i`, `12a`…`12e`); trước lát đó thao tác chưa có.
+
+    0.2.0 (docs/backend/M12-COMMUNITY.md, chỉ thêm): phần 2 của social (PHASE2 M12): **Cộng đồng** (bài viết, câu hỏi, chia sẻ thành tích,
+    câu trả lời, bình luận một cấp, thích, lưu, phiếu tán thành / không tán thành, chọn câu trả lời hay nhất, gợi ý câu hỏi tương tự, Hỏi
+    đáp của bài học, phần Cộng đồng trên trang cá nhân; lát `12a`), **kiểm duyệt** (tài khoản dưới 7 ngày chờ duyệt, bộ lọc từ ngữ, báo
+    cáo, tự ẩn khi 3 người báo cáo, hàng chờ, ẩn / hiện / xóa, nhắc nhở, khóa đăng bài 1/7/30 ngày, đề nghị khóa tài khoản sang identity,
+    kháng nghị một lần, nhật ký xử lý, danh sách từ khóa; lát `12c`), **ảnh** (tải thẳng lên kho S3 bằng URL ký sẵn, kiểm loại thật, nén
+    lại, xóa EXIF, mọi ảnh chờ admin duyệt; lát `12d`), **XP Cộng đồng** (social quyết lần chọn, lần tán thành nào được tính và phát sự kiện
+    `community.*` sang learning; lát `12e`; asyncapi/pkkemis.yaml 0.4.0). Thêm 11 loại thông báo `community_*`, mã lỗi mới, `Suggestion`
+    thêm `answeredMyQuestion`.
+
+    - **Cộng đồng chỉ dùng mã hồ sơ.** Tác giả, người báo cáo, người được xử lý đều là `Person` (`handle`), như phần bạn bè. Mã tài khoản
+      thật của người khác không có trong bất kì phản hồi Cộng đồng nào cho học sinh, giáo viên; đường admin chỉ trả thêm `userId` ở
+      `GET /v1/admin/community/members/{handle}`. Khóa tệp ảnh trong kho không chứa mã tài khoản.
+    - **Nội dung không theo chế độ.** Bài, câu hỏi, câu trả lời, bình luận, chữ admin viết khi xử lý lưu một lần, giống nhau ở Normal và Tu
+      tiên. Nhãn độ tin cậy ("Quản trị viên", "Chưa kiểm chứng") và tên gọi ("Hỏi đáp" ↔ "Luận đạo", "Câu trả lời hay nhất" ↔ "Chân giải")
+      do web dựng. Cờ của bộ lọc, lý do báo cáo, lý do xử lý là mã.
+    - **Máy chủ lọc trước khi trả.** Nội dung chờ duyệt, bị ẩn, đã xóa không có trong phản hồi cho người khác (tác giả thấy của mình kèm lý
+      do; admin thấy hết). Người xem đã chặn ai thì không nhận nội dung của người đó. Ảnh chờ duyệt không có URL với người khác.
+    - **Đề đang mở** (docs/community/PLAN.md mục 3.1): social hỏi learning (`POST /internal/community/screen` của learning.yaml 1.3.0) mỗi
+      lần đăng; đề bài không bao giờ rời learning. learning không trả lời thì bài **chờ duyệt** (không bao giờ cho qua).
 
     - Token là access token của identity (xem identity.yaml); service tự kiểm bằng khóa công khai (JWKS), không gọi identity. Người gọi là
       `sub` của token, vai trò là claim `role`; **không bao giờ** lấy người gọi từ thân yêu cầu.
@@ -51,6 +71,12 @@ tags:
     description: Thông báo trong app
   - name: admin
     description: Thông báo chung, xem tình trạng xã hội của một tài khoản, nhật ký
+  - name: community
+    description: Cộng đồng (0.2.0, M12) — bảng tin, hỏi đáp, trả lời, phiếu, báo cáo, kháng nghị
+  - name: media
+    description: Ảnh của Cộng đồng (0.2.0, M12) — xin chỗ tải lên, hoàn tất, bỏ
+  - name: moderation
+    description: Kiểm duyệt Cộng đồng (0.2.0, M12, admin) — hàng chờ, xử lý, kháng nghị, từ khóa, nhật ký
 
 paths:
   # ------------------------------------------------------------------ 10b: tóm tắt và quyền riêng tư
@@ -372,6 +398,8 @@ paths:
         bạn chia sẻ danh sách bạn với bạn bè). Xếp như `suggestFriends` của web: bạn chung × 3 + cùng lớp × 2. Không gợi ý: người đã là bạn
         hay đang có lời mời, người có chặn với mình (hai chiều), người bị khóa, người không nhận lời mời của mình ("Không ai", hay "Bạn cùng
         lớp" khi không cùng lớp), người đã từ chối lời mời của mình trong 30 ngày. "Người từng trả lời câu hỏi của mình" thêm ở M12.
+        0.2.0 (lát `12a`): thêm nguồn **người từng trả lời câu hỏi của mình** (học sinh có câu trả lời đang hiện dưới câu hỏi của mình trong 90
+        ngày; cùng các luật loại trừ trên), cờ `answeredMyQuestion`; điểm xếp thêm + 1.
       parameters:
         - name: limit
           in: query
@@ -967,6 +995,1279 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
 
+  # ================================================================== 0.2.0 (M12): Cộng đồng
+  # ------------------------------------------------------------------ 12a: mình ở Cộng đồng, bảng tin, bài
+
+  /v1/community/me:
+    get:
+      tags: [community]
+      operationId: getMyCommunity
+      x-slice: 12a
+      summary: Mình ở Cộng đồng (mọi vai trò)
+      description: |
+        Thẻ của mình, số liệu (cột phải của bảng tin), tài khoản mới hay không (dưới 7 ngày theo `createdAt` của identity: bài và câu hỏi chờ
+        duyệt, chưa bỏ phiếu không tán thành được), đang bị khóa đăng bài tới lúc nào, lượt đã dùng hôm nay (ngày giờ Việt Nam). Người chưa
+        có ở social thì social hỏi identity rồi tạo, như `GET /v1/me/social`.
+      responses:
+        "200":
+          description: Tóm tắt
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MyCommunity" }
+              example:
+                me: { handle: k7m2q9x4ta3b, fullName: Nguyễn Minh Anh, avatarInitials: MA, avatarUrl: null, frameId: meo-con-day-leo, role: student, level: 7, joinedOn: "2026-09-01" }
+                newAccount: false
+                newAccountUntil: null
+                canDownvote: true
+                restriction: null
+                stats: { questions: 1, posts: 0, answers: 0, accepted: 0, upvotesReceived: 0 }
+                today:
+                  resetsAt: "2026-10-16T17:00:00.000Z"
+                  threads: { used: 1, limit: 20 }
+                  replies: { used: 3, limit: 100 }
+                  uploads: { used: 0, limit: 30 }
+                  reports: { used: 0, limit: 20 }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/community/threads:
+    get:
+      tags: [community]
+      operationId: listThreads
+      x-slice: 12a
+      summary: Bảng tin, câu hỏi chưa có lời giải, bài đã lưu, Hỏi đáp của một bài học (mọi vai trò)
+      description: |
+        Chỉ bài đang hiện, cộng bài chờ duyệt **của chính mình** (kèm `flags`, như bản thử); bài bị ẩn của mình không ở bảng tin (xem ở trang
+        bài và `GET /v1/community/me/moderation`). Không có bài của người mình đã chặn, của tài khoản bị khóa (trừ admin xem). Theo `tab`:
+        - `new` (mặc định): mới nhất trước; trang đầu có bài ghim (tối đa 3) ở trên cùng.
+        - `hot`: "Nổi bật", bài trong 30 ngày xếp theo `hotScore` của web (`(thích + 2 × trả lời + 1) / (giờ tuổi + 2)^1,5`, bản sao có chủ
+          đích + script đối chiếu); con trỏ là vị trí, tối đa 200 bài.
+        - `unsolved`: câu hỏi chưa có câu trả lời được chọn, cũ nhất trước.
+        - `saved`: bài mình đã lưu, lưu gần nhất trước.
+        - `top`: câu hỏi có câu trả lời được chọn trước, rồi nhiều lượt thích (khung "Hỏi đáp về bài này" của bài học; dùng với `lessonId`).
+        Lọc thêm theo `chapterId`, `lessonId`, `kind`. `total` chỉ có khi lọc theo `lessonId` (số câu hỏi đang hiện của bài). Số đếm
+        (`answerCount`, `replyCount`, `likeCount`) là của nội dung đang hiện với mọi người, không trừ riêng người mình chặn.
+      parameters:
+        - name: tab
+          in: query
+          schema: { type: string, enum: [new, hot, unsolved, saved, top], default: new }
+        - name: chapterId
+          in: query
+          schema: { $ref: "#/components/schemas/ContentId" }
+        - name: lessonId
+          in: query
+          schema: { $ref: "#/components/schemas/ContentId" }
+        - name: kind
+          in: query
+          schema: { $ref: "#/components/schemas/ThreadKind" }
+        - { $ref: "#/components/parameters/Cursor" }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 50, default: 20 }
+      responses:
+        "200":
+          description: Một trang
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ThreadPage" }
+              example:
+                nextCursor: null
+                items:
+                  - id: 0b1c2d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e
+                    kind: question
+                    author: { handle: k7m2q9x4ta3b, fullName: Nguyễn Minh Anh, avatarInitials: MA, avatarUrl: null, frameId: meo-con-day-leo, role: student, level: 7, joinedOn: "2026-09-01" }
+                    title: Số oxi hóa của N trong NH₄⁺ tính thế nào ạ?
+                    body: Mình ra +5 nhưng đáp án là −3. Mình sai ở bước nào vậy?
+                    refs: { courseId: hoa-hoc-10, chapterId: c4, lessonId: so-oxi-hoa, questionId: null }
+                    achievementId: null
+                    images: []
+                    pendingImageCount: 0
+                    status: visible
+                    pinned: false
+                    acceptedReplyId: null
+                    likeCount: 3
+                    answerCount: 1
+                    replyCount: 1
+                    createdAt: "2026-10-16T11:40:00.000Z"
+                    lastActivityAt: "2026-10-16T12:05:00.000Z"
+                    liked: false
+                    saved: false
+                    mine: true
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      tags: [community]
+      operationId: createThread
+      x-slice: 12a
+      summary: Đăng bài viết, câu hỏi hay chia sẻ thành tích (mọi vai trò)
+      description: |
+        Theo thứ tự (docs/backend/M12-COMMUNITY.md mục 5.1):
+        1. Tài khoản bị khóa: 403 `account_locked`. Đang bị khóa đăng bài: 403 `muted` (kèm `until`).
+        2. Kiểm hình dạng (câu hỏi cần tiêu đề 10–150 kí tự và một bài học; thân 1–5000 kí tự; tối đa 3 ảnh): 400.
+        3. Lượt trong ngày (giờ Việt Nam; tài khoản dưới 7 ngày 5 bài, còn lại 20; admin không giới hạn): 409 `daily_limit` (`limitKind:
+           threads`). Cùng một nội dung (sau khi chuẩn hóa) đã đăng trong 24 giờ: 409 `duplicate_content`.
+        4. Bộ lọc từ ngữ (bản sao có chủ đích của `checkContent` ở web, danh sách từ khóa do admin sửa): từ bị chặn thì 422 `content_blocked`
+           kèm `flags` (bài không được lưu, lượt không bị trừ). Admin không qua bộ lọc.
+        5. Hỏi learning (`POST /internal/community/screen`, hạn 1,5 giây): đoạn chữ chép đề bài của đề đang mở → cờ `exam_overlap`; câu hỏi
+           về một câu đang nằm trong đề đang mở → 409 `question_in_open_exam`; bài học, chương, câu không có (hay chưa mở với học sinh) → 400
+           với lỗi từng trường. learning không trả lời → cờ `exam_check_failed` (bài chờ duyệt, không bao giờ cho qua).
+        6. `achievementId` phải là thành tích mình đã đạt (bản sao huy hiệu của social): 409 `achievement_not_unlocked`. Ảnh (`mediaIds`) phải
+           là ảnh của mình đã tải xong, chưa gắn vào bài nào: 409 `media_unavailable`.
+        7. Trạng thái: tài khoản dưới 7 ngày (cờ `new_account`), hay có cờ cần xem lại → `pending` (chỉ mình và admin thấy); còn lại `visible`.
+           Ảnh luôn chờ admin duyệt (trừ ảnh của admin).
+        `Idempotency-Key` (tùy chọn, web gửi mỗi lần bấm một mã): gửi lại cùng mã trong 24 giờ trả lại đúng kết quả lần đầu.
+      parameters:
+        - { $ref: "#/components/parameters/OptionalIdempotencyKey" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NewThread" }
+            example:
+              kind: question
+              title: Vì sao HF là acid yếu dù F có độ âm điện lớn nhất?
+              body: Mình nghĩ liên kết càng phân cực thì càng dễ tách H⁺ ra chứ?
+              lessonId: hydrogen-halide
+              mediaIds: [6f7a8b9c-0d1e-4f2a-9b3c-4d5e6f7a8b9c]
+      responses:
+        "200":
+          description: Đã đăng từ trước với cùng `Idempotency-Key`
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PostOutcome" }
+        "201":
+          description: Đã đăng (hiện ngay hay chờ duyệt, xem `outcome`)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PostOutcome" }
+              example:
+                outcome: { status: pending, flags: [{ code: new_account }] }
+                thread:
+                  id: 1c2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f
+                  kind: question
+                  author: { handle: h2y6e0n4a8c1, fullName: Đặng Hải Yến, avatarInitials: HY, avatarUrl: null, frameId: null, role: student, level: 2, joinedOn: "2026-10-13" }
+                  title: Vì sao HF là acid yếu dù F có độ âm điện lớn nhất?
+                  body: Mình nghĩ liên kết càng phân cực thì càng dễ tách H⁺ ra chứ?
+                  refs: { courseId: hoa-hoc-10, chapterId: c7, lessonId: hydrogen-halide, questionId: null }
+                  achievementId: null
+                  images:
+                    - { id: 6f7a8b9c-0d1e-4f2a-9b3c-4d5e6f7a8b9c, status: pending, alt: null, width: 1200, height: 900, url: "http://localhost:9000/pk-community-media/m/6f7a8b9c-0d1e-4f2a-9b3c-4d5e6f7a8b9c/full.webp?X-Amz-Signature=…", thumbUrl: "http://localhost:9000/pk-community-media/m/6f7a8b9c-0d1e-4f2a-9b3c-4d5e6f7a8b9c/thumb.webp?X-Amz-Signature=…", urlExpiresAt: "2026-10-16T13:10:00.000Z" }
+                  pendingImageCount: 0
+                  status: pending
+                  pinned: false
+                  acceptedReplyId: null
+                  likeCount: 0
+                  answerCount: 0
+                  replyCount: 0
+                  createdAt: "2026-10-16T12:10:00.000Z"
+                  lastActivityAt: "2026-10-16T12:10:00.000Z"
+                  liked: false
+                  saved: false
+                  mine: true
+                  flags: [{ code: new_account }]
+                  moderation: null
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403":
+          description: Tài khoản bị khóa (`account_locked`) hay đang bị khóa đăng bài (`muted`, kèm `until`)
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "409":
+          description: |
+            `daily_limit` (kèm `limit`, `resetsAt`, `limitKind`), `duplicate_content`, `question_in_open_exam`, `achievement_not_unlocked`,
+            `media_unavailable`
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422":
+          description: Bộ lọc chặn (`content_blocked`, kèm `flags`); `idempotency_mismatch`
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+              example:
+                title: Bài chưa đăng được
+                status: 422
+                code: content_blocked
+                detail: Bài có từ ngữ không phù hợp. Bạn sửa lại rồi đăng nhé.
+                flags: [{ code: blocked_term, term: vcl }]
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+
+  /v1/community/threads/{threadId}:
+    get:
+      tags: [community]
+      operationId: getThread
+      x-slice: 12a
+      summary: Một bài cùng các câu trả lời và bình luận, đã xếp (mọi vai trò)
+      description: |
+        Bài chờ duyệt, bị ẩn, đã xóa: 404 với người khác (tác giả thấy bài chờ duyệt, bị ẩn của mình kèm `moderation`; admin thấy hết). Bài
+        của người mình đã chặn: 404. `replies` là câu trả lời (câu hỏi) hay bình luận (bài viết), **đã xếp** như web: câu trả lời được chọn
+        trước, rồi của admin, rồi theo cận dưới Wilson của phiếu, rồi cũ trước; bình luận theo Wilson. Mỗi câu trả lời có `comments` (một cấp).
+        Chỉ nội dung đang hiện, cộng của chính mình đang chờ hay bị ẩn; không có nội dung của người mình chặn, của tài khoản bị khóa. Tối đa
+        200 câu trả lời (`truncated`). `replyBlock` cho biết mình có trả lời được không, cùng lý do máy chủ sẽ trả khi gửi.
+      parameters:
+        - { $ref: "#/components/parameters/ThreadId" }
+      responses:
+        "200":
+          description: Bài
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ThreadDetail" }
+              example:
+                thread:
+                  id: 0b1c2d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e
+                  kind: question
+                  author: { handle: k7m2q9x4ta3b, fullName: Nguyễn Minh Anh, avatarInitials: MA, avatarUrl: null, frameId: meo-con-day-leo, role: student, level: 7, joinedOn: "2026-09-01" }
+                  title: Số oxi hóa của N trong NH₄⁺ tính thế nào ạ?
+                  body: Mình ra +5 nhưng đáp án là −3. Mình sai ở bước nào vậy?
+                  refs: { courseId: hoa-hoc-10, chapterId: c4, lessonId: so-oxi-hoa, questionId: null }
+                  achievementId: null
+                  images: []
+                  pendingImageCount: 0
+                  status: visible
+                  pinned: false
+                  acceptedReplyId: null
+                  likeCount: 3
+                  answerCount: 1
+                  replyCount: 2
+                  createdAt: "2026-10-16T11:40:00.000Z"
+                  lastActivityAt: "2026-10-16T12:20:00.000Z"
+                  liked: false
+                  saved: true
+                  mine: true
+                replies:
+                  - id: 2d3e4f5a-6b7c-4d8e-9f0a-1b2c3d4e5f6a
+                    threadId: 0b1c2d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e
+                    parentId: null
+                    author: { handle: g8h1u5y9t3k2, fullName: Trần Gia Huy, avatarInitials: GH, avatarUrl: null, frameId: thanh-long-cuon-may, role: student, level: 10, joinedOn: "2026-08-03" }
+                    body: "Trong NH₄⁺, H liên kết với phi kim N nên H là +1. Tổng số oxi hóa bằng điện tích ion: x + 4·(+1) = +1 ⇒ x = −3."
+                    status: visible
+                    upvotes: 4
+                    downvotes: 0
+                    myVote: null
+                    createdAt: "2026-10-16T12:05:00.000Z"
+                    mine: false
+                    comments:
+                      - id: 3e4f5a6b-7c8d-4e9f-8a0b-1c2d3e4f5a6b
+                        threadId: 0b1c2d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e
+                        parentId: 2d3e4f5a-6b7c-4d8e-9f0a-1b2c3d4e5f6a
+                        author: { handle: k7m2q9x4ta3b, fullName: Nguyễn Minh Anh, avatarInitials: MA, avatarUrl: null, frameId: meo-con-day-leo, role: student, level: 7, joinedOn: "2026-09-01" }
+                        body: Mình hiểu rồi, cảm ơn bạn!
+                        status: visible
+                        upvotes: 0
+                        downvotes: 0
+                        myVote: null
+                        createdAt: "2026-10-16T12:20:00.000Z"
+                        mine: true
+                truncated: false
+                replyBlock: null
+                canAccept: true
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [community]
+      operationId: deleteMyThread
+      x-slice: 12a
+      summary: Tác giả xóa bài của mình
+      description: |
+        Chỉ tác giả (admin xóa qua kiểm duyệt). Bài và mọi câu trả lời, bình luận của nó không còn hiện với ai; chữ và ảnh bị xóa hẳn sau 30
+        ngày (giữ để xử lý báo cáo đang mở). XP đã cộng không bị trừ. Lặp được (đã xóa thì vẫn 204).
+      parameters:
+        - { $ref: "#/components/parameters/ThreadId" }
+      responses:
+        "204": { description: Đã xóa }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403":
+          description: Không phải tác giả (`not_author`)
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/community/threads/{threadId}/like:
+    put:
+      tags: [community]
+      operationId: likeThread
+      x-slice: 12a
+      summary: Thích bài (lặp được)
+      description: |
+        Chỉ bài đang hiện; thích bài của mình được (như bản thử; thích không có XP). Lượt thích của người mà tác giả đã chặn được ghi nhận
+        nhưng **không tính** vào số (người đó không được báo; M12-COMMUNITY.md mục 4.3).
+      parameters:
+        - { $ref: "#/components/parameters/ThreadId" }
+      responses:
+        "200":
+          description: Số lượt thích sau thao tác
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LikeState" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+    delete:
+      tags: [community]
+      operationId: unlikeThread
+      x-slice: 12a
+      summary: Bỏ thích (lặp được)
+      parameters:
+        - { $ref: "#/components/parameters/ThreadId" }
+      responses:
+        "200":
+          description: Số lượt thích sau thao tác
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LikeState" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/community/threads/{threadId}/save:
+    put:
+      tags: [community]
+      operationId: saveThread
+      x-slice: 12a
+      summary: Lưu bài (riêng mình; lặp được)
+      parameters:
+        - { $ref: "#/components/parameters/ThreadId" }
+      responses:
+        "204": { description: Đã lưu }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [community]
+      operationId: unsaveThread
+      x-slice: 12a
+      summary: Bỏ lưu (lặp được)
+      parameters:
+        - { $ref: "#/components/parameters/ThreadId" }
+      responses:
+        "204": { description: Đã bỏ lưu }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/community/threads/{threadId}/accepted-reply:
+    put:
+      tags: [community]
+      operationId: acceptReply
+      x-slice: 12a
+      summary: Người hỏi chọn câu trả lời hay nhất (đổi được)
+      description: |
+        Chỉ người hỏi, câu hỏi đang hiện (`not_question` với bài viết), câu trả lời đang hiện ngay dưới câu hỏi (`not_answer` với bình luận),
+        không phải của chính mình (409 `cannot_accept_own`). Trong một giao dịch có khóa dòng câu hỏi: ghi lựa chọn, thông báo
+        `community_accepted` cho người trả lời, quyết XP và phát `community.answer_accepted` (lát `12e`; asyncapi 0.4.0). **XP +20 chỉ cho lần
+        chọn đầu tiên của mỗi câu hỏi** và theo luật chống farm của mục 8 (M12-COMMUNITY.md); đổi lựa chọn hay bỏ rồi chọn lại không cộng
+        thêm, không trừ. Chọn lại đúng câu đang chọn: 200, không làm gì.
+      parameters:
+        - { $ref: "#/components/parameters/ThreadId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [replyId]
+              properties:
+                replyId: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Lựa chọn sau thao tác
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AcceptState" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403":
+          description: Không phải người hỏi (`not_author`)
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "`not_question`, `not_answer`, `cannot_accept_own`, `thread_not_visible`"
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+    delete:
+      tags: [community]
+      operationId: unacceptReply
+      x-slice: 12a
+      summary: Bỏ chọn câu trả lời hay nhất (lặp được; XP đã cộng giữ nguyên)
+      parameters:
+        - { $ref: "#/components/parameters/ThreadId" }
+      responses:
+        "200":
+          description: Lựa chọn sau thao tác
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AcceptState" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403":
+          description: Không phải người hỏi (`not_author`)
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/community/threads/{threadId}/replies:
+    post:
+      tags: [community]
+      operationId: createReply
+      x-slice: 12a
+      summary: Trả lời câu hỏi, bình luận bài viết hay bình luận dưới một câu trả lời (mọi vai trò)
+      description: |
+        `parentId` trống: câu trả lời (câu hỏi) hay bình luận (bài viết). `parentId` là một câu trả lời đang hiện của cùng câu hỏi: bình luận
+        dưới nó (một cấp; bình luận dưới bình luận, hay dưới bình luận của bài viết: 400). Luật như `createThread` (khóa, khóa đăng bài, lượt
+        trong ngày 20 / 100, nội dung lặp, bộ lọc, đề đang mở) với hai khác biệt: tài khoản dưới 7 ngày **không** phải chờ duyệt (chỉ qua bộ
+        lọc), và không có ảnh. Bài phải đang hiện (409 `thread_not_visible`). Chủ bài đặt "Ai trả lời bài của tôi: Không ai" (`repliesFrom:
+        nobody`, social.yaml 0.1.0) thì chỉ admin trả lời được; **người bị chủ bài (hay chủ câu trả lời được bình luận) chặn nhận cùng lỗi 403
+        `replies_closed`**, để không biết mình bị chặn. Hiện ngay thì thông báo `community_answer` / `community_comment` cho người liên quan.
+      parameters:
+        - { $ref: "#/components/parameters/ThreadId" }
+        - { $ref: "#/components/parameters/OptionalIdempotencyKey" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NewReply" }
+      responses:
+        "200":
+          description: Đã gửi từ trước với cùng `Idempotency-Key`
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReplyOutcome" }
+        "201":
+          description: Đã gửi
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReplyOutcome" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403":
+          description: "`account_locked`, `muted` (kèm `until`), `replies_closed`"
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "`daily_limit` (`limitKind: replies`), `duplicate_content`, `thread_not_visible`"
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422":
+          description: "`content_blocked` (kèm `flags`), `idempotency_mismatch`"
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+
+  /v1/community/replies/{replyId}:
+    delete:
+      tags: [community]
+      operationId: deleteMyReply
+      x-slice: 12a
+      summary: Tác giả xóa câu trả lời hay bình luận của mình
+      description: |
+        Xóa câu trả lời thì bình luận dưới nó cũng không còn hiện; câu trả lời đang được chọn thì câu hỏi trở lại "chưa có lời giải" (XP đã
+        cộng giữ nguyên). Lặp được.
+      parameters:
+        - { $ref: "#/components/parameters/ReplyId" }
+      responses:
+        "204": { description: Đã xóa }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403":
+          description: Không phải tác giả (`not_author`)
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/community/replies/{replyId}/vote:
+    put:
+      tags: [community]
+      operationId: voteReply
+      x-slice: 12a
+      summary: Tán thành (+1) hay không tán thành (−1) một câu trả lời, bình luận; đổi được
+      description: |
+        Mỗi người một phiếu cho mỗi câu (khóa chính), đổi được. Không bỏ phiếu cho mình (409 `self_vote`); nội dung phải đang hiện; tài khoản
+        dưới 7 ngày không bỏ phiếu không tán thành được (403 `downvote_not_allowed`). Khóa đăng bài **không** chặn bỏ phiếu. Phiếu của người
+        mà tác giả đã chặn được ghi nhận nhưng không tính vào số, không XP, không ai được báo. Phiếu không tán thành không trừ XP. Lần đầu một
+        người tán thành một câu: social quyết XP (+2, mục 8) và phát `community.reply_upvoted` (lát `12e`).
+      parameters:
+        - { $ref: "#/components/parameters/ReplyId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [value]
+              properties:
+                value: { type: integer, enum: [1, -1] }
+      responses:
+        "200":
+          description: Phiếu sau thao tác
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VoteState" }
+              example: { replyId: 2d3e4f5a-6b7c-4d8e-9f0a-1b2c3d4e5f6a, upvotes: 5, downvotes: 0, myVote: 1 }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403":
+          description: "`downvote_not_allowed`, `account_locked`"
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "`self_vote`"
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+    delete:
+      tags: [community]
+      operationId: retractVote
+      x-slice: 12a
+      summary: Rút phiếu (lặp được; XP đã cộng giữ nguyên, tán thành lại không cộng thêm)
+      parameters:
+        - { $ref: "#/components/parameters/ReplyId" }
+      responses:
+        "200":
+          description: Phiếu sau thao tác
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VoteState" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/community/similar:
+    get:
+      tags: [community]
+      operationId: listSimilarQuestions
+      x-slice: 12a
+      summary: Câu hỏi tương tự đã có (trước khi đăng câu hỏi)
+      description: |
+        So không dấu bằng PostgreSQL `unaccent` + trigram trên tiêu đề và thân của câu hỏi đang hiện (PLAN.md mục 6.2), câu có lời giải được
+        chọn trước. Tối đa 3 (mặc định) hay 5. Từ 10 kí tự; 30 lần mỗi phút (429).
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema: { type: string, minLength: 10, maxLength: 300 }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 5, default: 3 }
+      responses:
+        "200":
+          description: Câu hỏi tương tự
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    maxItems: 5
+                    items: { $ref: "#/components/schemas/ThreadSummary" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+
+  /v1/profiles/{handle}/community:
+    get:
+      tags: [community, profiles]
+      operationId: getProfileCommunity
+      x-slice: 12a
+      summary: Phần Cộng đồng trên trang cá nhân của một người (mọi vai trò, mọi chủ trang)
+      description: |
+        Số liệu (đếm trên nội dung đang hiện), bài đã đăng và câu trả lời gần nhất (mỗi loại tối đa 20, con trỏ riêng ở `threadsCursor`,
+        `answersCursor`). Bài đã đăng là công khai trong app (docs/community/PLAN.md mục 3.3), nên phần này **không** theo quyền riêng tư của
+        trang cá nhân; người xem đã chặn chủ trang: `hidden` lý do `blocked`, không có danh sách. Mã không có, người bị khóa (trừ admin xem):
+        404, giống `GET /v1/profiles/{handle}`. Có cả chủ trang là giáo viên, admin (trang giáo viên chỉ có phần này, M10 mục 4.2).
+      parameters:
+        - { $ref: "#/components/parameters/Handle" }
+        - name: part
+          in: query
+          description: Chỉ lấy tiếp một danh sách (cùng với `cursor`); trống là cả hai, trang đầu.
+          schema: { type: string, enum: [threads, answers] }
+        - { $ref: "#/components/parameters/Cursor" }
+      responses:
+        "200":
+          description: Phần Cộng đồng
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProfileCommunity" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+
+  # ------------------------------------------------------------------ 12c: báo cáo, kháng nghị (người dùng)
+
+  /v1/community/reports:
+    post:
+      tags: [community]
+      operationId: reportContent
+      x-slice: 12c
+      summary: Báo cáo một bài, câu trả lời hay bình luận
+      description: |
+        Đúng một trong `threadId`, `replyId`; nội dung đang hiện, không phải của mình. Mỗi người một báo cáo đang mở cho mỗi nội dung (gửi lại:
+        200 với báo cáo đó). Người bị báo cáo không biết ai báo cáo. 20 báo cáo mỗi ngày (409 `daily_limit`, `limitKind: reports`). Khi một nội
+        dung có báo cáo đang mở từ **3 người khác nhau có tài khoản từ 7 ngày**, nó tạm ẩn ngay (`hidden_by: reports`, nhật ký ghi là hệ
+        thống), tác giả nhận `community_hidden` với `byReports: true`; nội dung của admin không bao giờ tự ẩn. Người báo cáo không được biết nội
+        dung đã ẩn hay chưa. "Bắt nạt", "Nội dung người lớn" lên đầu hàng chờ.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NewReport" }
+            example: { replyId: 2d3e4f5a-6b7c-4d8e-9f0a-1b2c3d4e5f6a, reason: wrong_chemistry, note: Nói ngược khái niệm chất khử và chất oxi hóa. }
+      responses:
+        "200":
+          description: Mình đã báo cáo nội dung này (báo cáo cũ còn mở)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReportReceipt" }
+        "201":
+          description: Đã ghi
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReportReceipt" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "`daily_limit` (`limitKind: reports`), `self` (nội dung của mình)"
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+
+  /v1/community/me/moderation:
+    get:
+      tags: [community]
+      operationId: listMyModeration
+      x-slice: 12c
+      summary: Các lần mình hay nội dung của mình bị xử lý, và kháng nghị (mọi vai trò)
+      description: |
+        Trang "Nội dung bị xử lý" (`/community/moderation` ở web): ẩn, xóa (bởi admin), tự ẩn do báo cáo, ảnh bị từ chối, nhắc nhở, khóa đăng
+        bài; mới nhất trước, 180 ngày. Kèm lý do (mã và lời admin viết cho mình), có kháng nghị được không, kháng nghị đã gửi. Không bao giờ có
+        người báo cáo, số báo cáo, hay admin nào xử lý.
+      parameters:
+        - { $ref: "#/components/parameters/Cursor" }
+      responses:
+        "200":
+          description: Một trang
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MyModerationPage" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/community/appeals:
+    post:
+      tags: [community]
+      operationId: createAppeal
+      x-slice: 12c
+      summary: Kháng nghị một lần xử lý (một lần duy nhất)
+      description: |
+        Kháng nghị được: ẩn và xóa của admin, nhắc nhở, khóa đăng bài, ảnh bị từ chối; trong 30 ngày kể từ lần xử lý (409 `not_appealable`).
+        Tự ẩn do báo cáo chưa phải quyết định cuối (chờ admin), nên chưa kháng nghị được. Khóa tài khoản không kháng nghị trong app (người bị
+        khóa không đăng nhập được). Mỗi lần xử lý một kháng nghị (409 `appeal_exists`). Vào hàng chờ "Kháng nghị" của admin.
+      parameters:
+        - { $ref: "#/components/parameters/OptionalIdempotencyKey" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [actionId, message]
+              properties:
+                actionId: { type: string, format: uuid }
+                message: { type: string, minLength: 10, maxLength: 500 }
+      responses:
+        "201":
+          description: Đã gửi
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AppealState" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "`not_appealable`, `appeal_exists`"
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422":
+          description: "`idempotency_mismatch`"
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  # ------------------------------------------------------------------ 12d: ảnh
+
+  /v1/community/media:
+    post:
+      tags: [media]
+      operationId: requestUpload
+      x-slice: 12d
+      summary: Xin chỗ tải một ảnh lên (URL ký sẵn, 5 phút)
+      description: |
+        JPG, PNG, WebP; 1 byte – 5 MB (docs/community/PLAN.md mục 3.4). Trả URL `PUT` ký sẵn tới khu nhận của kho ảnh (MinIO ở máy này, S3 khi
+        lên AWS), đã ký kèm `Content-Type` và `Content-Length` đúng như khai: trình duyệt gửi thẳng tệp lên kho (không qua web, không qua
+        social), phải gửi đúng header trong `headers` và đúng số byte đã khai. Khóa tệp là mã ảnh, không có mã tài khoản. Tài khoản bị khóa,
+        đang bị khóa đăng bài: 403. Lượt trong ngày: 5 (tài khoản dưới 7 ngày) hay 30 ảnh (409 `daily_limit`, `limitKind: uploads`); 10 lần mỗi
+        phút (429). Ảnh không gắn vào bài nào trong 24 giờ bị xóa.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [contentType, bytes]
+              properties:
+                contentType: { type: string, enum: [image/jpeg, image/png, image/webp] }
+                bytes: { type: integer, minimum: 1, maximum: 5242880 }
+      responses:
+        "201":
+          description: Chỗ tải lên
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UploadTicket" }
+              example:
+                mediaId: 6f7a8b9c-0d1e-4f2a-9b3c-4d5e6f7a8b9c
+                method: PUT
+                url: "http://localhost:9000/pk-community-incoming/u/6f7a8b9c-0d1e-4f2a-9b3c-4d5e6f7a8b9c?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=…"
+                headers: { Content-Type: image/jpeg }
+                expiresAt: "2026-10-16T12:15:00.000Z"
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403":
+          description: "`account_locked`, `muted`"
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "409":
+          description: "`daily_limit` (`limitKind: uploads`)"
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+
+  /v1/community/media/{mediaId}/complete:
+    post:
+      tags: [media]
+      operationId: completeUpload
+      x-slice: 12d
+      summary: Báo đã tải xong; social kiểm, nén lại, xóa siêu dữ liệu
+      description: |
+        social đọc tệp ở khu nhận và (mục 7.3 của M12-COMMUNITY.md): kiểm số byte đúng như khai; kiểm **loại thật** theo byte đầu tệp (phải
+        đúng loại đã khai; SVG, GIF, HEIC, tệp khác bị từ chối); giải mã đủ bằng `sharp` (hỏng: `image_invalid`); cạnh 32–8000 px, tối đa 25
+        triệu điểm ảnh (`image_too_large`); ảnh động bị từ chối; xoay theo EXIF rồi **ghi lại thành WebP không còn EXIF, XMP, ICC** (cạnh dài
+        tối đa 1600 px và bản nhỏ 480 px); so mã băm với danh sách ảnh admin đã chặn (`image_blocked`). Tệp gốc bị xóa ngay. Ảnh qua kiểm
+        vẫn **chờ admin duyệt** sau khi gắn vào bài (trừ ảnh của admin). Hết hạn tải lên: 409 `upload_expired`; chưa có tệp: 409
+        `upload_incomplete`; quá nhiều ảnh đang xử lý: 503 `media_busy` kèm `Retry-After`. Lặp được: ảnh đã xong trả lại kết quả.
+      parameters:
+        - { $ref: "#/components/parameters/MediaId" }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                alt: { type: [string, "null"], maxLength: 120, description: Chú thích (văn bản thay thế) do người đăng gõ; trống là không có. Không lấy tên tệp. }
+      responses:
+        "200":
+          description: Ảnh đã sẵn sàng gắn vào bài
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MediaInfo" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "`upload_expired`, `upload_incomplete`"
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422":
+          description: "`image_invalid`, `image_too_large`, `image_blocked`"
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "503":
+          description: "`media_busy`"
+          headers:
+            Retry-After: { $ref: "#/components/headers/RetryAfter" }
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /v1/community/media/{mediaId}:
+    delete:
+      tags: [media]
+      operationId: discardUpload
+      x-slice: 12d
+      summary: Bỏ một ảnh chưa gắn vào bài (lặp được)
+      parameters:
+        - { $ref: "#/components/parameters/MediaId" }
+      responses:
+        "204": { description: Đã bỏ }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Ảnh đã gắn vào bài (`media_unavailable`); xóa bài để bỏ ảnh
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  # ------------------------------------------------------------------ 12c, 12d: kiểm duyệt (admin)
+
+  /v1/admin/community/queues:
+    get:
+      tags: [moderation]
+      operationId: getModerationSummary
+      x-slice: 12c
+      summary: Số việc tồn và lúc chờ lâu nhất của từng hàng chờ (admin)
+      description: Cho các ô ở đầu trang quản trị (web tô đỏ ô có việc chờ quá 24 giờ).
+      responses:
+        "200":
+          description: Tóm tắt
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ModerationSummary" }
+              example:
+                queues:
+                  - { queue: unanswered, count: 2, oldestAt: "2026-10-15T09:00:00.000Z" }
+                  - { queue: pending, count: 1, oldestAt: "2026-10-16T05:05:00.000Z" }
+                  - { queue: images, count: 1, oldestAt: "2026-10-16T12:10:00.000Z" }
+                  - { queue: reports, count: 2, oldestAt: "2026-10-16T03:15:00.000Z" }
+                  - { queue: appeals, count: 0, oldestAt: null }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v1/admin/community/queues/{queue}:
+    get:
+      tags: [moderation]
+      operationId: listModerationQueue
+      x-slice: 12c
+      summary: Một hàng chờ, cũ nhất trước (admin)
+      description: |
+        - `unanswered`: câu hỏi đang hiện chưa có câu trả lời nào đang hiện.
+        - `pending`: bài và câu trả lời chờ duyệt (tài khoản mới, bộ lọc, trùng đề, chưa kiểm được đề), kèm cờ.
+        - `images`: ảnh chờ duyệt của bài đang hiện hay chờ duyệt (lát `12d`).
+        - `reports`: nội dung có báo cáo đang mở, gộp theo nội dung; "Bắt nạt", "Nội dung người lớn" trước; cộng câu trả lời, bình luận có điểm
+          tán thành từ −5 trở xuống chưa được admin xem (`lowScore`).
+        - `appeals`: kháng nghị đang mở.
+      parameters:
+        - name: queue
+          in: path
+          required: true
+          schema: { $ref: "#/components/schemas/QueueName" }
+        - { $ref: "#/components/parameters/Cursor" }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 50, default: 20 }
+      responses:
+        "200":
+          description: Một trang
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/QueuePage" }
+              example:
+                queue: reports
+                nextCursor: null
+                items:
+                  - kind: report
+                    thread:
+                      id: 4f5a6b7c-8d9e-4f0a-9b1c-2d3e4f5a6b7c
+                      kind: post
+                      author: { handle: g8h1u5y9t3k2, fullName: Trần Gia Huy, avatarInitials: GH, avatarUrl: null, frameId: null, role: student, level: 10, joinedOn: "2026-08-03" }
+                      title: null
+                      body: Mẹo nhớ nhanh quy tắc số oxi hóa mình hay dùng khi làm bài.
+                      refs: { courseId: hoa-hoc-10, chapterId: c4, lessonId: null, questionId: null }
+                      achievementId: null
+                      images: []
+                      pendingImageCount: 0
+                      status: visible
+                      pinned: false
+                      acceptedReplyId: null
+                      likeCount: 24
+                      answerCount: 0
+                      replyCount: 3
+                      createdAt: "2026-10-16T02:00:00.000Z"
+                      lastActivityAt: "2026-10-16T04:40:00.000Z"
+                      liked: false
+                      saved: false
+                      mine: false
+                    reply:
+                      id: 5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c8e
+                      threadId: 4f5a6b7c-8d9e-4f0a-9b1c-2d3e4f5a6b7c
+                      parentId: null
+                      author: { handle: d7t3h9i1n5h2, fullName: Bùi Đức Thịnh, avatarInitials: ĐT, avatarUrl: null, frameId: null, role: student, level: 5, joinedOn: "2026-08-02" }
+                      body: Mẹo này dở ẹc, ai mà chả biết
+                      status: visible
+                      upvotes: 0
+                      downvotes: 3
+                      myVote: null
+                      createdAt: "2026-10-16T03:02:00.000Z"
+                      mine: false
+                    reports:
+                      - { id: 6b7c8d9e-0f1a-4b2c-9d3e-4f5a6b7c8d9f, reporter: { handle: b4c8d2e6f0a1, fullName: Lê Bảo Ngọc, avatarInitials: BN, avatarUrl: null, frameId: null, role: student, level: 8, joinedOn: "2026-08-30" }, reason: offensive, note: null, createdAt: "2026-10-16T03:15:00.000Z" }
+                    urgent: false
+                    lowScore: false
+                    hiddenByReports: false
+                    authorLocked: false
+                    since: "2026-10-16T03:15:00.000Z"
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v1/admin/community/threads/{threadId}/moderation:
+    post:
+      tags: [moderation]
+      operationId: moderateThread
+      x-slice: 12c
+      summary: Duyệt, ẩn, hiện lại, xóa, ghim, bỏ ghim một bài (admin)
+      description: |
+        `hide`, `delete` cần `reasonCode` (tác giả thấy mã và `note`, kháng nghị được một lần). Mỗi thao tác một dòng nhật ký, đóng các báo cáo
+        đang mở của bài (`resolved`), và thông báo cho tác giả (`community_approved`, `community_hidden`, `community_restored`; không có với ghim).
+        `approve` một bài đang chờ mà người hỏi đã có câu trả lời chờ thì không đổi gì ở câu trả lời. Ghim tối đa 3 bài (409 `pin_limit`). Nội
+        dung của admin không bị `hide` bởi admin khác qua đây (409 `cannot_moderate_admin`). Lặp được: trạng thái đã đúng thì 200, không ghi thêm.
+      parameters:
+        - { $ref: "#/components/parameters/ThreadId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ModerationRequest" }
+      responses:
+        "200":
+          description: Kết quả
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ModerationResult" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "`pin_limit`, `cannot_moderate_admin`"
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /v1/admin/community/replies/{replyId}/moderation:
+    post:
+      tags: [moderation]
+      operationId: moderateReply
+      x-slice: 12c
+      summary: Duyệt, ẩn, hiện lại, xóa một câu trả lời hay bình luận (admin)
+      description: |
+        Như `moderateThread` (không có ghim). Duyệt một câu trả lời đang chờ thì người hỏi (hay chủ câu trả lời được bình luận) nhận thông báo
+        như lúc nó được đăng. Ẩn hay xóa câu trả lời đang được chọn thì câu hỏi trở lại "chưa có lời giải".
+      parameters:
+        - { $ref: "#/components/parameters/ReplyId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ModerationRequest" }
+      responses:
+        "200":
+          description: Kết quả
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ModerationResult" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "`cannot_moderate_admin`"
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /v1/admin/community/reports/dismissals:
+    post:
+      tags: [moderation]
+      operationId: dismissReports
+      x-slice: 12c
+      summary: Bỏ qua mọi báo cáo đang mở của một nội dung (admin)
+      description: |
+        Báo cáo thành `dismissed`. Nội dung đang tự ẩn do báo cáo thì hiện lại và tác giả nhận `community_restored`. Với `lowScore`: đánh dấu đã
+        xem, không hiện lại ở hàng chờ cho tới khi có báo cáo mới.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ContentTarget" }
+      responses:
+        "200":
+          description: Kết quả
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ModerationResult" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/admin/community/media/{mediaId}/review:
+    post:
+      tags: [moderation]
+      operationId: reviewMedia
+      x-slice: 12d
+      summary: Duyệt hay từ chối một ảnh (admin)
+      description: |
+        `approve`: ảnh hiện với mọi người (khi bài đang hiện). `reject` cần `reasonCode`: ảnh không còn hiện với ai trừ admin, tác giả nhận
+        `community_image_rejected` (kháng nghị được); tệp bị xóa sau 30 ngày. `blockHash: true` thêm mã băm vào danh sách chặn: lần tải lên đúng
+        ảnh đó bị từ chối (`image_blocked`), ảnh gần giống bị gắn cờ cho admin. Lặp được.
+      parameters:
+        - { $ref: "#/components/parameters/MediaId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [decision]
+              properties:
+                decision: { type: string, enum: [approve, reject] }
+                reasonCode: { $ref: "#/components/schemas/ReportReason" }
+                note: { type: string, maxLength: 500 }
+                blockHash: { type: boolean, default: false }
+      responses:
+        "200":
+          description: Kết quả
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ModerationResult" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/admin/community/appeals/{appealId}/resolution:
+    post:
+      tags: [moderation]
+      operationId: resolveAppeal
+      x-slice: 12c
+      summary: Chấp nhận hay giữ nguyên quyết định (admin)
+      description: |
+        Chấp nhận: hoàn lại lần xử lý (hiện lại nội dung, ảnh; gỡ khóa đăng bài; nhắc nhở ghi là đã rút), người kháng nghị nhận
+        `community_appeal_accepted`. Giữ nguyên: `community_appeal_rejected`. Ghi nhật ký. Kháng nghị đã xử lý: 409 `not_appealable`.
+      parameters:
+        - name: appealId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [accept]
+              properties:
+                accept: { type: boolean }
+                note: { type: string, maxLength: 500, description: Lời gửi người kháng nghị (tùy chọn). }
+      responses:
+        "200":
+          description: Kháng nghị sau thao tác
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AppealState" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "`not_appealable`"
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /v1/admin/community/members/{handle}:
+    get:
+      tags: [moderation]
+      operationId: getMemberModeration
+      x-slice: 12c
+      summary: Lịch sử xử lý của một người (admin)
+      description: Số bài, câu trả lời, nội dung bị ẩn, báo cáo đang mở nhắm vào người đó, đang bị khóa đăng bài tới đâu, 20 lần xử lý gần nhất. Có `userId` để mở `/admin/users`.
+      parameters:
+        - { $ref: "#/components/parameters/Handle" }
+      responses:
+        "200":
+          description: Lịch sử
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MemberModeration" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/admin/community/members/{handle}/sanctions:
+    post:
+      tags: [moderation]
+      operationId: sanctionMember
+      x-slice: 12c
+      summary: Nhắc nhở, khóa đăng bài 1/7/30 ngày, hay khóa tài khoản (admin)
+      description: |
+        Mức xử lý của docs/community/PLAN.md mục 4. Không áp cho admin (409 `cannot_moderate_admin`).
+        - `warn`: thông báo `community_warned` (mã lý do, lời admin), kháng nghị được.
+        - `mute` (`days` 1, 7 hay 30): không đăng bài, trả lời, bình luận, tải ảnh tới `until`; vẫn đọc, thích, bỏ phiếu, lưu, báo cáo, chặn.
+          Đang bị khóa thì lần mới thay lần cũ (tính từ bây giờ). Thông báo `community_muted`, kháng nghị được.
+        - `ban`: đề nghị **identity khóa tài khoản**: ghi nhật ký và, cùng giao dịch, sự kiện `moderation.ban_requested` (asyncapi 0.4.0) vào
+          outbox; identity khóa (thu hồi phiên, phát `user.locked`) trong vài giây. Từ lúc social nhận `user.locked`, nội dung của người đó không
+          hiện với ai trừ admin, và mọi thao tác ghi của họ bị 403 `account_locked`. Mở khóa ở `/admin/users` như mọi tài khoản (nội dung hiện
+          lại). Không có lý do chữ trong sự kiện, chỉ mã.
+        `Idempotency-Key` (tùy chọn): bấm đúp không xử lý hai lần.
+      parameters:
+        - { $ref: "#/components/parameters/Handle" }
+        - { $ref: "#/components/parameters/OptionalIdempotencyKey" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SanctionRequest" }
+            example: { kind: mute, days: 7, reasonCode: bullying, note: Bình luận chê bai bạn khác nhiều lần. }
+      responses:
+        "200":
+          description: Đã xử lý từ trước với cùng `Idempotency-Key`
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ModerationResult" }
+        "201":
+          description: Đã xử lý
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ModerationResult" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "`cannot_moderate_admin`"
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422":
+          description: "`idempotency_mismatch`"
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /v1/admin/community/members/{handle}/mute:
+    delete:
+      tags: [moderation]
+      operationId: liftMute
+      x-slice: 12c
+      summary: Gỡ khóa đăng bài trước hạn (admin; lặp được)
+      parameters:
+        - { $ref: "#/components/parameters/Handle" }
+      responses:
+        "204": { description: Đã gỡ }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/admin/community/log:
+    get:
+      tags: [moderation]
+      operationId: getModerationLog
+      x-slice: 12c
+      summary: Nhật ký xử lý (admin)
+      description: Mọi thao tác kiểm duyệt (của admin và tự động), mới nhất trước, giữ 1 năm. Web cũng gộp thành nguồn "Cộng đồng" ở `/admin/audit`.
+      parameters:
+        - { $ref: "#/components/parameters/Cursor" }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+      responses:
+        "200":
+          description: Một trang
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ModerationLogPage" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v1/admin/community/filter-terms:
+    get:
+      tags: [moderation]
+      operationId: listFilterTerms
+      x-slice: 12c
+      summary: Danh sách từ khóa của bộ lọc (admin)
+      responses:
+        "200":
+          description: Danh sách, theo chữ
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    maxItems: 500
+                    items: { $ref: "#/components/schemas/FilterTerm" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    put:
+      tags: [moderation]
+      operationId: putFilterTerm
+      x-slice: 12c
+      summary: Thêm một từ khóa hay đổi loại của nó (admin; lặp được)
+      description: |
+        `block`: không cho đăng, báo lý do cho người viết; `review`: giữ lại chờ duyệt. Từ không dấu khớp cả dạng có dấu (như `checkContent` của
+        web). Có hiệu lực ngay với bài đăng sau đó; không quét lại bài cũ. Tối đa 500 từ. Ghi nhật ký.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [term, kind]
+              properties:
+                term: { type: string, minLength: 2, maxLength: 60 }
+                kind: { type: string, enum: [block, review] }
+      responses:
+        "200":
+          description: Từ khóa sau thao tác
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FilterTerm" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    delete:
+      tags: [moderation]
+      operationId: deleteFilterTerm
+      x-slice: 12c
+      summary: Bỏ một từ khóa (admin; lặp được)
+      parameters:
+        - name: term
+          in: query
+          required: true
+          schema: { type: string, minLength: 2, maxLength: 60 }
+      responses:
+        "204": { description: Đã bỏ }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
 components:
   securitySchemes:
     bearerAuth:
@@ -1010,6 +2311,24 @@ components:
       required: false
       description: Một mã cho mỗi lần bấm "Gửi" (web dùng UUID); gửi lại đúng mã khi thử lại sau lỗi mạng. Giữ 24 giờ, phạm vi là người gọi.
       schema: { type: string, pattern: "^[A-Za-z0-9_-]{8,100}$" }
+    ThreadId:
+      name: threadId
+      in: path
+      required: true
+      description: "0.2.0: mã bài Cộng đồng (UUID do social cấp)."
+      schema: { type: string, format: uuid }
+    ReplyId:
+      name: replyId
+      in: path
+      required: true
+      description: "0.2.0: mã câu trả lời hay bình luận."
+      schema: { type: string, format: uuid }
+    MediaId:
+      name: mediaId
+      in: path
+      required: true
+      description: "0.2.0: mã ảnh (cũng là tên tệp trong kho; không chứa mã tài khoản)."
+      schema: { type: string, format: uuid }
 
   headers:
     ETag:
@@ -1085,9 +2404,45 @@ components:
             - request_gone
             - cannot_block_admin
             - idempotency_mismatch
+            # 0.2.0 (M12): Cộng đồng, kiểm duyệt, ảnh
+            - account_locked
+            - muted
+            - content_blocked
+            - duplicate_content
+            - replies_closed
+            - thread_not_visible
+            - question_in_open_exam
+            - not_question
+            - not_answer
+            - not_author
+            - cannot_accept_own
+            - self_vote
+            - downvote_not_allowed
+            - achievement_not_unlocked
+            - media_unavailable
+            - upload_expired
+            - upload_incomplete
+            - image_invalid
+            - image_too_large
+            - image_blocked
+            - media_busy
+            - not_appealable
+            - appeal_exists
+            - cannot_moderate_admin
+            - pin_limit
         detail: { type: string, description: "Thông báo tiếng Việt, hiển thị được cho người dùng." }
         limit: { type: integer, minimum: 1, description: "Chỉ `daily_limit`: số lời mời (hay thông báo chung) tối đa mỗi ngày của người gọi." }
         resetsAt: { type: string, format: date-time, description: "Chỉ `daily_limit`: lúc ngày mới bắt đầu (00:00 giờ Việt Nam)." }
+        limitKind:
+          type: string
+          enum: [threads, replies, uploads, reports]
+          description: "0.2.0: chỉ `daily_limit` của Cộng đồng: lượt nào đã hết (bài, trả lời và bình luận, ảnh, báo cáo)."
+        until: { type: string, format: date-time, description: "0.2.0: chỉ `muted`: lúc hết khóa đăng bài." }
+        flags:
+          type: array
+          maxItems: 20
+          description: "0.2.0: chỉ `content_blocked`: vì sao bộ lọc chặn (mã; web dựng chữ)."
+          items: { $ref: "#/components/schemas/FilterFlag" }
         errors:
           type: array
           description: Chỉ `validation_failed`.
@@ -1309,6 +2664,9 @@ components:
         person: { $ref: "#/components/schemas/Person" }
         mutualCount: { type: integer, minimum: 0 }
         classmate: { $ref: "#/components/schemas/Classmate" }
+        answeredMyQuestion:
+          type: boolean
+          description: "0.2.0 (lát `12a`): người này có câu trả lời đang hiện dưới một câu hỏi của mình trong 90 ngày. Vắng ở bản 0.1.0."
 
     Block:
       type: object
@@ -1527,9 +2885,20 @@ components:
         - top_up_paid
         - wallet_adjusted
         - announcement
+        # 0.2.0 (M12)
+        - community_answer
+        - community_comment
+        - community_accepted
+        - community_approved
+        - community_hidden
+        - community_restored
+        - community_image_rejected
+        - community_warned
+        - community_muted
+        - community_appeal_accepted
+        - community_appeal_rejected
       description: |
-        Thêm loại là bản thêm của hợp đồng (Cộng đồng ở M12: trả lời, bình luận, được chọn, được duyệt, bị ẩn…; tin nhắn ở M13). Web bỏ qua
-        loại lạ. Mỗi loại dùng các `params` sau:
+        Thêm loại là bản thêm của hợp đồng (Cộng đồng từ 0.2.0; tin nhắn ở M13). Web bỏ qua loại lạ. Mỗi loại dùng các `params` sau:
         - `friend_request` (người nhận lời mời; `actor` người gửi): `requestId`. Bị xóa khi lời mời được trả lời, hủy, hết hạn, có chặn.
         - `friend_accepted` (người đã gửi lời mời; `actor` người chấp nhận): không có tham số.
         - `cheer` (người được cổ vũ; gộp theo ngày khi chưa đọc): `cheeredOn`.
@@ -1543,6 +2912,24 @@ components:
         - `top_up_paid` (học sinh): `orderCode`, `coins`.
         - `wallet_adjusted` (học sinh; admin cộng hay trừ ví): `amount` (dương hay âm). Không bao giờ có lý do của admin.
         - `announcement` (nhóm nhận; `actor` null, web ghi "Quản trị viên"): `announcementId`, `title`, `body`.
+
+        0.2.0 (M12, Cộng đồng; lát `12a`, `12c`, `12d`). `subject` là vài chữ đầu (tối đa 80 kí tự) của tiêu đề hay thân bài, câu trả lời mà
+        thông báo nói tới, chụp lúc tạo (chữ người dùng viết, giống nhau ở mọi chế độ); `note` là lời admin viết cho người nhận. Thông báo có
+        `actor` là người mà người nhận đã chặn, hay đã bị khóa, không hiện. Web dựng đường dẫn `/community/threads/<threadId>` (kèm
+        `#reply-<replyId>`) hay `/community/moderation`.
+        - `community_answer` (người hỏi; gộp theo câu hỏi khi chưa đọc, `actor` người trả lời gần nhất): `threadId`, `replyId`, `subject`.
+        - `community_comment` (chủ bài viết, hay chủ câu trả lời được bình luận; gộp theo bài hay theo câu trả lời khi chưa đọc): `threadId`,
+          `replyId` (bình luận gần nhất), `subject` (bài hay câu trả lời được bình luận).
+        - `community_accepted` (người trả lời; `actor` người hỏi): `threadId`, `replyId`, `subject`. Không hứa XP (learning quyết).
+        - `community_approved` (tác giả; nội dung chờ duyệt đã được duyệt): `threadId`, `replyId` (khi là câu trả lời), `subject`.
+        - `community_hidden` (tác giả; `actor` null; nội dung bị admin ẩn hay xóa, hay tự ẩn): `threadId`, `replyId`, `subject`, `actionId`,
+          `reasonCode` (vắng khi `byReports`), `note`, `byReports` (tự ẩn vì nhiều người báo cáo, chờ admin xem lại), `appealable`.
+        - `community_restored` (tác giả; hiện lại sau khi admin xem, hay báo cáo bị bỏ qua): `threadId`, `replyId`, `subject`.
+        - `community_image_rejected` (tác giả): `threadId`, `subject`, `actionId`, `reasonCode`, `note`, `appealable`.
+        - `community_warned` (người bị nhắc nhở): `actionId`, `reasonCode`, `note`, `appealable`.
+        - `community_muted` (người bị khóa đăng bài): `actionId`, `reasonCode`, `note`, `until`, `appealable`.
+        - `community_appeal_accepted`, `community_appeal_rejected` (người kháng nghị): `actionId`, `note`; `threadId`, `replyId`, `subject` khi
+          lần xử lý nhắm vào một nội dung.
 
     NotificationParams:
       type: object
@@ -1566,6 +2953,16 @@ components:
         announcementId: { type: string, format: uuid }
         title: { type: string, minLength: 1, maxLength: 120 }
         body: { type: string, maxLength: 500 }
+        # 0.2.0 (M12)
+        threadId: { type: string, format: uuid }
+        replyId: { type: string, format: uuid }
+        subject: { type: string, minLength: 1, maxLength: 80 }
+        actionId: { type: string, format: uuid }
+        reasonCode: { $ref: "#/components/schemas/ReportReason" }
+        note: { type: string, maxLength: 500 }
+        until: { type: string, format: date-time }
+        byReports: { type: boolean }
+        appealable: { type: boolean }
 
     Notification:
       type: object
@@ -1678,3 +3075,691 @@ components:
           type: array
           items: { $ref: "#/components/schemas/AuditEntry" }
         nextCursor: { type: [string, "null"] }
+
+    # ================================================================ 0.2.0 (M12): Cộng đồng, kiểm duyệt, ảnh
+
+    ContentId:
+      type: string
+      pattern: "^[\\w.:-]{1,100}$"
+      description: Mã nội dung học của learning (khóa, chương, bài, câu ngân hàng), dạng chữ như `hoa-hoc-10`, `c4`, `so-oxi-hoa`.
+
+    ThreadKind:
+      type: string
+      enum: [post, question, achievement_share]
+      description: "`post` bài viết; `question` câu hỏi (Hỏi đáp); `achievement_share` chia sẻ một thành tích đã đạt (học sinh tự bấm, không tự đăng)."
+
+    ContentStatus:
+      type: string
+      enum: [pending, visible, hidden, deleted]
+      description: |
+        `pending` chờ admin duyệt (chỉ tác giả và admin thấy); `visible` mọi người thấy; `hidden` bị ẩn (bởi admin, hay tự ẩn vì 3 người báo
+        cáo; chỉ tác giả và admin thấy); `deleted` đã xóa (bởi tác giả hay admin; chỉ admin thấy, tới khi bị xóa hẳn).
+
+    ReportReason:
+      type: string
+      enum: [offensive, bullying, adult, spam, cheating, wrong_chemistry, personal_info, other]
+      description: |
+        Như `ReportReason` của web (`src/types/community.ts`, nhãn ở `REPORT_REASONS`); cũng là mã lý do khi admin ẩn, xóa, nhắc nhở, khóa.
+        `bullying`, `adult` lên đầu hàng chờ.
+
+    FilterFlag:
+      type: object
+      additionalProperties: false
+      description: |
+        Một cờ của bộ lọc tự động (bản sao có chủ đích của `checkContent` ở web, M12-COMMUNITY.md mục 5.2). Web dựng chữ như bản thử ("Có số
+        điện thoại", "Trùng câu hỏi của đề thi đang mở"…). `blocked_term` làm bài bị từ chối; các cờ khác làm bài chờ duyệt.
+      required: [code]
+      properties:
+        code:
+          type: string
+          enum: [new_account, blocked_term, review_term, phone, email, link, exam_overlap, exam_check_failed]
+        term: { type: string, minLength: 1, maxLength: 60, description: "Chỉ `blocked_term`, `review_term`: từ khóa đã khớp." }
+
+    ContentRefs:
+      type: object
+      additionalProperties: false
+      description: |
+        Bài gắn với khóa, chương, bài học, câu ngân hàng nào (mã của learning, đã kiểm lúc đăng). Tên khóa, chương, bài và đề bài của câu web
+        lấy từ nội dung (đề bài của câu thuộc đề đang mở không bao giờ đến trình duyệt học sinh: web không xin). Bài học đã bị gỡ thì web chỉ
+        hiện chương.
+      required: [courseId, chapterId, lessonId, questionId]
+      properties:
+        courseId: { type: [string, "null"], pattern: "^[\\w.:-]{1,100}$" }
+        chapterId: { type: [string, "null"], pattern: "^[\\w.:-]{1,100}$" }
+        lessonId: { type: [string, "null"], pattern: "^[\\w.:-]{1,100}$" }
+        questionId: { type: [string, "null"], pattern: "^[\\w.:-]{1,100}$" }
+
+    CommunityImage:
+      type: object
+      additionalProperties: false
+      description: |
+        Một ảnh của bài. Người khác chỉ nhận ảnh đã duyệt (ảnh chờ duyệt của người khác chỉ đếm ở `pendingImageCount`); tác giả và admin nhận
+        cả ảnh chờ duyệt; ảnh bị từ chối chỉ tác giả (không URL) và admin thấy. `url`, `thumbUrl` là URL `GET` ký sẵn của kho ảnh, hết hạn lúc
+        `urlExpiresAt` (1 giờ): trang mở lâu thì web đọc lại bài. Ảnh đã được nén lại thành WebP, không còn EXIF.
+      required: [id, status, alt, width, height, url, thumbUrl, urlExpiresAt]
+      properties:
+        id: { type: string, format: uuid }
+        status: { type: string, enum: [pending, visible, rejected] }
+        alt: { type: [string, "null"], maxLength: 120, description: Chú thích người đăng gõ; null là không có (web ghi "Ảnh 1 của bài"…). }
+        width: { type: integer, minimum: 1, maximum: 1600 }
+        height: { type: integer, minimum: 1, maximum: 1600 }
+        url: { type: [string, "null"], maxLength: 2000 }
+        thumbUrl: { type: [string, "null"], maxLength: 2000 }
+        urlExpiresAt: { type: [string, "null"], format: date-time }
+
+    ContentModeration:
+      type: [object, "null"]
+      additionalProperties: false
+      description: |
+        Chỉ với tác giả (và admin): vì sao nội dung của mình bị ẩn hay bị xóa, có kháng nghị được không. Null khi không bị xử lý (nội dung chờ
+        duyệt thì xem `flags`).
+      required: [actionId, action, reasonCode, note, at, appealable, appeal]
+      properties:
+        actionId: { type: string, format: uuid }
+        action: { type: string, enum: [hide, auto_hide, delete] }
+        reasonCode: { oneOf: [{ $ref: "#/components/schemas/ReportReason" }, { type: "null" }] }
+        note: { type: [string, "null"], maxLength: 500 }
+        at: { type: string, format: date-time }
+        appealable: { type: boolean }
+        appeal: { oneOf: [{ $ref: "#/components/schemas/AppealState" }, { type: "null" }] }
+
+    ThreadSummary:
+      type: object
+      additionalProperties: false
+      description: |
+        Một bài trên bảng tin. `author` là thẻ người (mã hồ sơ, không bao giờ mã tài khoản). `liked`, `saved`, `mine` theo người xem. `flags`,
+        `moderation` chỉ có khi người xem là tác giả hay admin.
+      required: [id, kind, author, title, body, refs, achievementId, images, pendingImageCount, status, pinned, acceptedReplyId, likeCount, answerCount, replyCount, createdAt, lastActivityAt, liked, saved, mine]
+      properties:
+        id: { type: string, format: uuid }
+        kind: { $ref: "#/components/schemas/ThreadKind" }
+        author: { $ref: "#/components/schemas/Person" }
+        title: { type: [string, "null"], maxLength: 150, description: Bắt buộc với câu hỏi. }
+        body: { type: string, minLength: 1, maxLength: 5000 }
+        refs: { $ref: "#/components/schemas/ContentRefs" }
+        achievementId: { type: [string, "null"], pattern: "^[a-z0-9-]{1,60}$", description: Chỉ `achievement_share`. Tên thành tích web lấy từ danh mục của learning. }
+        images:
+          type: array
+          maxItems: 3
+          items: { $ref: "#/components/schemas/CommunityImage" }
+        pendingImageCount: { type: integer, minimum: 0, maximum: 3, description: Số ảnh chờ duyệt người xem không được thấy (web ghi "N ảnh đang chờ duyệt"). }
+        status: { $ref: "#/components/schemas/ContentStatus" }
+        pinned: { type: boolean }
+        acceptedReplyId: { type: [string, "null"], format: uuid }
+        likeCount: { type: integer, minimum: 0 }
+        answerCount: { type: integer, minimum: 0, description: Câu trả lời đang hiện (câu hỏi); 0 với bài viết. }
+        replyCount: { type: integer, minimum: 0, description: Mọi câu trả lời và bình luận đang hiện. }
+        createdAt: { type: string, format: date-time }
+        lastActivityAt: { type: string, format: date-time }
+        liked: { type: boolean }
+        saved: { type: boolean }
+        mine: { type: boolean }
+        flags:
+          type: array
+          items: { $ref: "#/components/schemas/FilterFlag" }
+        moderation: { $ref: "#/components/schemas/ContentModeration" }
+
+    Reply:
+      type: object
+      additionalProperties: false
+      description: |
+        Một câu trả lời (câu hỏi), bình luận (bài viết) hay bình luận dưới một câu trả lời (`parentId`). `comments` chỉ có ở câu trả lời của câu
+        hỏi (một cấp), đã xếp. `myVote` là phiếu của người xem.
+      required: [id, threadId, parentId, author, body, status, upvotes, downvotes, myVote, createdAt, mine]
+      properties:
+        id: { type: string, format: uuid }
+        threadId: { type: string, format: uuid }
+        parentId: { type: [string, "null"], format: uuid }
+        author: { $ref: "#/components/schemas/Person" }
+        body: { type: string, minLength: 1, maxLength: 3000 }
+        status: { $ref: "#/components/schemas/ContentStatus" }
+        upvotes: { type: integer, minimum: 0 }
+        downvotes: { type: integer, minimum: 0 }
+        myVote: { type: [integer, "null"], enum: [1, -1, null] }
+        createdAt: { type: string, format: date-time }
+        mine: { type: boolean }
+        flags:
+          type: array
+          items: { $ref: "#/components/schemas/FilterFlag" }
+        moderation: { $ref: "#/components/schemas/ContentModeration" }
+        comments:
+          type: array
+          maxItems: 100
+          items: { $ref: "#/components/schemas/Reply" }
+
+    ThreadDetail:
+      type: object
+      additionalProperties: false
+      required: [thread, replies, truncated, replyBlock, canAccept]
+      properties:
+        thread: { $ref: "#/components/schemas/ThreadSummary" }
+        replies:
+          type: array
+          maxItems: 200
+          items: { $ref: "#/components/schemas/Reply" }
+        truncated: { type: boolean, description: Bài có hơn 200 câu trả lời; chỉ 200 câu đầu theo thứ tự. }
+        replyBlock:
+          type: [string, "null"]
+          enum: [replies_closed, muted, account_locked, thread_not_visible, null]
+          description: Vì sao mình chưa trả lời được (cùng mã lỗi máy chủ sẽ trả); null là trả lời được. Bị chủ bài chặn hiện là `replies_closed`.
+        canAccept: { type: boolean, description: Mình là người hỏi và câu hỏi đang hiện. }
+
+    ThreadPage:
+      type: object
+      additionalProperties: false
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          maxItems: 50
+          items: { $ref: "#/components/schemas/ThreadSummary" }
+        nextCursor: { type: [string, "null"] }
+        total: { type: integer, minimum: 0, description: Chỉ khi lọc theo `lessonId`. }
+
+    NewThread:
+      type: object
+      additionalProperties: false
+      description: |
+        `question`: cần `title` (10–150 kí tự) và `lessonId` (có thể kèm `questionId` khi đến từ "Hỏi về câu này"). `post`: `lessonId` hay
+        `chapterId` tùy chọn. `achievement_share`: cần `achievementId`, không ảnh. Chữ gửi lên đã định dạng công thức (H₂SO₄) như web đang làm;
+        máy chủ không đổi chữ.
+      required: [kind, body]
+      properties:
+        kind: { $ref: "#/components/schemas/ThreadKind" }
+        title: { type: string, minLength: 10, maxLength: 150 }
+        body: { type: string, minLength: 1, maxLength: 5000 }
+        lessonId: { $ref: "#/components/schemas/ContentId" }
+        chapterId: { $ref: "#/components/schemas/ContentId" }
+        questionId: { $ref: "#/components/schemas/ContentId" }
+        achievementId: { type: string, pattern: "^[a-z0-9-]{1,60}$" }
+        mediaIds:
+          type: array
+          maxItems: 3
+          uniqueItems: true
+          items: { type: string, format: uuid }
+
+    NewReply:
+      type: object
+      additionalProperties: false
+      required: [body]
+      properties:
+        body: { type: string, minLength: 1, maxLength: 3000 }
+        parentId: { type: string, format: uuid, description: Câu trả lời được bình luận (chỉ với câu hỏi). }
+
+    Outcome:
+      type: object
+      additionalProperties: false
+      description: Kết quả bộ lọc và kiểm duyệt của một lần đăng (web hiện "Đã đăng" hay "Đang chờ duyệt" kèm lý do, như `PostOutcome` của bản thử).
+      required: [status, flags]
+      properties:
+        status: { type: string, enum: [visible, pending] }
+        flags:
+          type: array
+          items: { $ref: "#/components/schemas/FilterFlag" }
+
+    PostOutcome:
+      type: object
+      additionalProperties: false
+      required: [thread, outcome]
+      properties:
+        thread: { $ref: "#/components/schemas/ThreadSummary" }
+        outcome: { $ref: "#/components/schemas/Outcome" }
+
+    ReplyOutcome:
+      type: object
+      additionalProperties: false
+      required: [reply, outcome]
+      properties:
+        reply: { $ref: "#/components/schemas/Reply" }
+        outcome: { $ref: "#/components/schemas/Outcome" }
+
+    LikeState:
+      type: object
+      additionalProperties: false
+      required: [threadId, likeCount, liked]
+      properties:
+        threadId: { type: string, format: uuid }
+        likeCount: { type: integer, minimum: 0 }
+        liked: { type: boolean }
+
+    AcceptState:
+      type: object
+      additionalProperties: false
+      required: [threadId, acceptedReplyId]
+      properties:
+        threadId: { type: string, format: uuid }
+        acceptedReplyId: { type: [string, "null"], format: uuid }
+
+    VoteState:
+      type: object
+      additionalProperties: false
+      required: [replyId, upvotes, downvotes, myVote]
+      properties:
+        replyId: { type: string, format: uuid }
+        upvotes: { type: integer, minimum: 0 }
+        downvotes: { type: integer, minimum: 0 }
+        myVote: { type: [integer, "null"], enum: [1, -1, null] }
+
+    CommunityStats:
+      type: object
+      additionalProperties: false
+      description: Như `memberStats` của web, đếm trên nội dung đang hiện.
+      required: [questions, posts, answers, accepted, upvotesReceived]
+      properties:
+        questions: { type: integer, minimum: 0 }
+        posts: { type: integer, minimum: 0 }
+        answers: { type: integer, minimum: 0 }
+        accepted: { type: integer, minimum: 0 }
+        upvotesReceived: { type: integer, minimum: 0 }
+
+    DailyUse:
+      type: object
+      additionalProperties: false
+      required: [used, limit]
+      properties:
+        used: { type: integer, minimum: 0 }
+        limit: { type: [integer, "null"], minimum: 0, description: Null là không giới hạn (admin). }
+
+    MemberRestriction:
+      type: [object, "null"]
+      additionalProperties: false
+      description: Đang bị khóa đăng bài tới `until`; null là không.
+      required: [kind, until, actionId]
+      properties:
+        kind: { type: string, const: mute }
+        until: { type: string, format: date-time }
+        actionId: { type: string, format: uuid }
+
+    MyCommunity:
+      type: object
+      additionalProperties: false
+      required: [me, newAccount, newAccountUntil, canDownvote, restriction, stats, today]
+      properties:
+        me: { $ref: "#/components/schemas/Person" }
+        newAccount: { type: boolean, description: Tài khoản dưới 7 ngày (theo ngày tạo ở identity; chưa biết thì tính là mới). Admin luôn false. }
+        newAccountUntil: { type: [string, "null"], format: date-time }
+        canDownvote: { type: boolean }
+        restriction: { $ref: "#/components/schemas/MemberRestriction" }
+        stats: { $ref: "#/components/schemas/CommunityStats" }
+        today:
+          type: object
+          additionalProperties: false
+          required: [resetsAt, threads, replies, uploads, reports]
+          properties:
+            resetsAt: { type: string, format: date-time }
+            threads: { $ref: "#/components/schemas/DailyUse" }
+            replies: { $ref: "#/components/schemas/DailyUse" }
+            uploads: { $ref: "#/components/schemas/DailyUse" }
+            reports: { $ref: "#/components/schemas/DailyUse" }
+
+    ProfileAnswer:
+      type: object
+      additionalProperties: false
+      required: [reply, thread]
+      properties:
+        reply:
+          type: object
+          additionalProperties: false
+          required: [id, body, upvotes, downvotes, accepted, createdAt]
+          properties:
+            id: { type: string, format: uuid }
+            body: { type: string, minLength: 1, maxLength: 3000 }
+            upvotes: { type: integer, minimum: 0 }
+            downvotes: { type: integer, minimum: 0 }
+            accepted: { type: boolean }
+            createdAt: { type: string, format: date-time }
+        thread:
+          type: object
+          additionalProperties: false
+          required: [id, title]
+          properties:
+            id: { type: string, format: uuid }
+            title: { type: string, maxLength: 150 }
+
+    ProfileCommunity:
+      type: object
+      additionalProperties: false
+      required: [person, hidden, stats, threads, threadsCursor, answers, answersCursor]
+      properties:
+        person: { $ref: "#/components/schemas/Person" }
+        hidden:
+          oneOf: [{ $ref: "#/components/schemas/HiddenPart" }, { type: "null" }]
+          description: Chỉ lý do `blocked` (người xem đã chặn chủ trang); khi đó các danh sách rỗng, số liệu 0.
+        stats: { $ref: "#/components/schemas/CommunityStats" }
+        threads:
+          type: array
+          maxItems: 20
+          items: { $ref: "#/components/schemas/ThreadSummary" }
+        threadsCursor: { type: [string, "null"] }
+        answers:
+          type: array
+          maxItems: 20
+          items: { $ref: "#/components/schemas/ProfileAnswer" }
+        answersCursor: { type: [string, "null"] }
+
+    ContentTarget:
+      type: object
+      additionalProperties: false
+      description: Đúng một trong hai.
+      properties:
+        threadId: { type: string, format: uuid }
+        replyId: { type: string, format: uuid }
+      oneOf:
+        - { required: [threadId], not: { required: [replyId] } }
+        - { required: [replyId], not: { required: [threadId] } }
+
+    NewReport:
+      type: object
+      additionalProperties: false
+      required: [reason]
+      properties:
+        threadId: { type: string, format: uuid }
+        replyId: { type: string, format: uuid }
+        reason: { $ref: "#/components/schemas/ReportReason" }
+        note: { type: string, maxLength: 500 }
+      oneOf:
+        - { required: [threadId], not: { required: [replyId] } }
+        - { required: [replyId], not: { required: [threadId] } }
+
+    ReportReceipt:
+      type: object
+      additionalProperties: false
+      description: Chỉ xác nhận đã ghi; không nói nội dung đã bị ẩn hay chưa, có bao nhiêu người khác báo cáo.
+      required: [id, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        createdAt: { type: string, format: date-time }
+
+    AppealState:
+      type: object
+      additionalProperties: false
+      required: [id, actionId, status, message, createdAt, resolvedAt, note]
+      properties:
+        id: { type: string, format: uuid }
+        actionId: { type: string, format: uuid }
+        status: { type: string, enum: [open, accepted, rejected] }
+        message: { type: string, minLength: 10, maxLength: 500 }
+        createdAt: { type: string, format: date-time }
+        resolvedAt: { type: [string, "null"], format: date-time }
+        note: { type: [string, "null"], maxLength: 500, description: Lời admin gửi kèm quyết định. }
+
+    MyModerationItem:
+      type: object
+      additionalProperties: false
+      required: [actionId, action, at, reasonCode, note, target, until, reversed, appealable, appealUntil, appeal]
+      properties:
+        actionId: { type: string, format: uuid }
+        action: { type: string, enum: [hide, auto_hide, delete, image_reject, warn, mute] }
+        at: { type: string, format: date-time }
+        reasonCode: { oneOf: [{ $ref: "#/components/schemas/ReportReason" }, { type: "null" }] }
+        note: { type: [string, "null"], maxLength: 500 }
+        target:
+          type: [object, "null"]
+          additionalProperties: false
+          required: [kind, threadId, replyId, subject]
+          properties:
+            kind: { type: string, enum: [thread, reply, image] }
+            threadId: { type: string, format: uuid }
+            replyId: { type: [string, "null"], format: uuid }
+            subject: { type: string, minLength: 1, maxLength: 80 }
+        until: { type: [string, "null"], format: date-time, description: Chỉ `mute`. }
+        reversed: { type: boolean, description: "Lần xử lý đã được hoàn lại (hiện lại, gỡ khóa, kháng nghị được chấp nhận)." }
+        appealable: { type: boolean }
+        appealUntil: { type: [string, "null"], format: date-time }
+        appeal: { oneOf: [{ $ref: "#/components/schemas/AppealState" }, { type: "null" }] }
+
+    MyModerationPage:
+      type: object
+      additionalProperties: false
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          maxItems: 50
+          items: { $ref: "#/components/schemas/MyModerationItem" }
+        nextCursor: { type: [string, "null"] }
+
+    UploadTicket:
+      type: object
+      additionalProperties: false
+      required: [mediaId, method, url, headers, expiresAt]
+      properties:
+        mediaId: { type: string, format: uuid }
+        method: { type: string, const: PUT }
+        url: { type: string, maxLength: 2000, description: URL ký sẵn tới khu nhận của kho ảnh (S3). }
+        headers:
+          type: object
+          additionalProperties: false
+          required: [Content-Type]
+          description: Header trình duyệt phải gửi đúng như vậy (`Content-Length` trình duyệt tự đặt bằng số byte của tệp, phải bằng `bytes` đã khai).
+          properties:
+            Content-Type: { type: string, enum: [image/jpeg, image/png, image/webp] }
+        expiresAt: { type: string, format: date-time }
+
+    MediaInfo:
+      type: object
+      additionalProperties: false
+      required: [id, status, width, height, alt, previewUrl, previewUrlExpiresAt]
+      properties:
+        id: { type: string, format: uuid }
+        status: { type: string, const: ready, description: "Đã kiểm và nén lại, chờ gắn vào bài." }
+        width: { type: integer, minimum: 1, maximum: 1600 }
+        height: { type: integer, minimum: 1, maximum: 1600 }
+        alt: { type: [string, "null"], maxLength: 120 }
+        previewUrl: { type: string, maxLength: 2000, description: "URL ký sẵn của bản nhỏ (chỉ người tải lên), để xem trước trong ô soạn." }
+        previewUrlExpiresAt: { type: string, format: date-time }
+
+    QueueName:
+      type: string
+      enum: [unanswered, pending, images, reports, appeals]
+
+    ModerationSummary:
+      type: object
+      additionalProperties: false
+      required: [queues]
+      properties:
+        queues:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [queue, count, oldestAt]
+            properties:
+              queue: { $ref: "#/components/schemas/QueueName" }
+              count: { type: integer, minimum: 0 }
+              oldestAt: { type: [string, "null"], format: date-time }
+
+    QueueReport:
+      type: object
+      additionalProperties: false
+      description: Một nội dung có báo cáo đang mở (gộp mọi báo cáo của nó), hay có điểm tán thành từ −5 trở xuống (`lowScore`).
+      required: [kind, thread, reply, reports, urgent, lowScore, hiddenByReports, authorLocked, since]
+      properties:
+        kind: { type: string, const: report }
+        thread: { $ref: "#/components/schemas/ThreadSummary" }
+        reply: { oneOf: [{ $ref: "#/components/schemas/Reply" }, { type: "null" }] }
+        reports:
+          type: array
+          maxItems: 50
+          items:
+            type: object
+            additionalProperties: false
+            required: [id, reporter, reason, note, createdAt]
+            properties:
+              id: { type: string, format: uuid }
+              reporter: { $ref: "#/components/schemas/Person" }
+              reason: { $ref: "#/components/schemas/ReportReason" }
+              note: { type: [string, "null"], maxLength: 500 }
+              createdAt: { type: string, format: date-time }
+        urgent: { type: boolean }
+        lowScore: { type: boolean }
+        hiddenByReports: { type: boolean }
+        authorLocked: { type: boolean }
+        since: { type: string, format: date-time }
+
+    QueueItem:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          description: Câu hỏi chưa có câu trả lời nào đang hiện.
+          required: [kind, thread, since]
+          properties:
+            kind: { type: string, const: unanswered }
+            thread: { $ref: "#/components/schemas/ThreadSummary" }
+            since: { type: string, format: date-time }
+        - type: object
+          additionalProperties: false
+          description: Một bài (`reply` null) hay một câu trả lời, bình luận chờ duyệt, kèm cờ.
+          required: [kind, thread, reply, flags, authorNew, authorLocked, since]
+          properties:
+            kind: { type: string, const: pending }
+            thread: { $ref: "#/components/schemas/ThreadSummary" }
+            reply: { oneOf: [{ $ref: "#/components/schemas/Reply" }, { type: "null" }] }
+            flags:
+              type: array
+              items: { $ref: "#/components/schemas/FilterFlag" }
+            authorNew: { type: boolean }
+            authorLocked: { type: boolean }
+            since: { type: string, format: date-time }
+        - type: object
+          additionalProperties: false
+          description: Một ảnh chờ duyệt (URL ký sẵn cho admin).
+          required: [kind, image, thread, similarToRejected, since]
+          properties:
+            kind: { type: string, const: image }
+            image: { $ref: "#/components/schemas/CommunityImage" }
+            thread: { $ref: "#/components/schemas/ThreadSummary" }
+            similarToRejected: { type: boolean, description: Gần giống (mã băm cảm nhận) một ảnh admin đã chặn. }
+            since: { type: string, format: date-time }
+        - $ref: "#/components/schemas/QueueReport"
+        - type: object
+          additionalProperties: false
+          description: Một kháng nghị đang mở, kèm lần xử lý bị kháng nghị và nội dung của nó (nếu có).
+          required: [kind, appeal, appellant, action, thread, reply, since]
+          properties:
+            kind: { type: string, const: appeal }
+            appeal: { $ref: "#/components/schemas/AppealState" }
+            appellant: { $ref: "#/components/schemas/Person" }
+            action: { $ref: "#/components/schemas/ModerationLogEntry" }
+            thread: { oneOf: [{ $ref: "#/components/schemas/ThreadSummary" }, { type: "null" }] }
+            reply: { oneOf: [{ $ref: "#/components/schemas/Reply" }, { type: "null" }] }
+            since: { type: string, format: date-time }
+
+    QueuePage:
+      type: object
+      additionalProperties: false
+      required: [queue, items, nextCursor]
+      properties:
+        queue: { $ref: "#/components/schemas/QueueName" }
+        items:
+          type: array
+          maxItems: 50
+          items: { $ref: "#/components/schemas/QueueItem" }
+        nextCursor: { type: [string, "null"] }
+
+    ModerationRequest:
+      type: object
+      additionalProperties: false
+      description: "`hide`, `delete` cần `reasonCode` (thiếu: 400 `validation_failed`). `pin`, `unpin` chỉ với bài."
+      required: [action]
+      properties:
+        action: { type: string, enum: [approve, hide, restore, delete, pin, unpin] }
+        reasonCode: { $ref: "#/components/schemas/ReportReason" }
+        note: { type: string, maxLength: 500, description: Lời giải thích cho tác giả (họ thấy nguyên văn). }
+
+    ModerationResult:
+      type: object
+      additionalProperties: false
+      required: [changed, actionId]
+      properties:
+        changed: { type: boolean, description: False khi trạng thái đã đúng từ trước (không ghi nhật ký). }
+        actionId: { type: [string, "null"], format: uuid }
+        until: { type: [string, "null"], format: date-time, description: Chỉ `mute`. }
+
+    SanctionRequest:
+      type: object
+      additionalProperties: false
+      description: "`days` bắt buộc với `mute`, không được có với `warn`, `ban` (400 `validation_failed`)."
+      required: [kind, reasonCode]
+      properties:
+        kind: { type: string, enum: [warn, mute, ban] }
+        days: { type: integer, enum: [1, 7, 30], description: Chỉ `mute` (bắt buộc). }
+        reasonCode: { $ref: "#/components/schemas/ReportReason" }
+        note: { type: string, maxLength: 500, description: "Lời giải thích cho người bị xử lý (`warn`, `mute`); không đi vào sự kiện `ban`." }
+        relatedActionId: { type: string, format: uuid, description: Lần xử lý nội dung dẫn tới quyết định này (tùy chọn). }
+
+    ModerationAction:
+      type: string
+      enum: [approve, hide, restore, delete, auto_hide, dismiss_reports, pin, unpin, image_approve, image_reject, warn, mute, unmute, ban, appeal_accept, appeal_reject, filter_term_set, filter_term_remove]
+      description: Như `ModerationActionKind` của web (`suspend` của bản thử là `mute`; `auto_hide` là hệ thống).
+
+    ModerationLogEntry:
+      type: object
+      additionalProperties: false
+      required: [id, actor, action, target, reasonCode, note, until, at]
+      properties:
+        id: { type: string, format: uuid }
+        actor: { oneOf: [{ $ref: "#/components/schemas/Person" }, { type: "null" }], description: Null là hệ thống (tự ẩn vì báo cáo). }
+        action: { $ref: "#/components/schemas/ModerationAction" }
+        target:
+          type: object
+          additionalProperties: false
+          required: [kind, threadId, replyId, mediaId, member, subject, term]
+          properties:
+            kind: { type: string, enum: [thread, reply, image, member, filter_term] }
+            threadId: { type: [string, "null"], format: uuid }
+            replyId: { type: [string, "null"], format: uuid }
+            mediaId: { type: [string, "null"], format: uuid }
+            member: { oneOf: [{ $ref: "#/components/schemas/Person" }, { type: "null" }], description: Người bị xử lý (hay tác giả của nội dung). }
+            subject: { type: [string, "null"], maxLength: 80 }
+            term: { type: [string, "null"], maxLength: 60 }
+        reasonCode: { oneOf: [{ $ref: "#/components/schemas/ReportReason" }, { type: "null" }] }
+        note: { type: [string, "null"], maxLength: 500 }
+        until: { type: [string, "null"], format: date-time }
+        at: { type: string, format: date-time }
+
+    ModerationLogPage:
+      type: object
+      additionalProperties: false
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          maxItems: 100
+          items: { $ref: "#/components/schemas/ModerationLogEntry" }
+        nextCursor: { type: [string, "null"] }
+
+    MemberModeration:
+      type: object
+      additionalProperties: false
+      required: [userId, person, locked, newAccount, restriction, counts, recent]
+      properties:
+        userId: { type: string, format: uuid, description: "Mã tài khoản (chỉ đường admin), để mở `/admin/users`." }
+        person: { $ref: "#/components/schemas/Person" }
+        locked: { type: boolean }
+        newAccount: { type: boolean }
+        restriction: { $ref: "#/components/schemas/MemberRestriction" }
+        counts:
+          type: object
+          additionalProperties: false
+          required: [threads, replies, hidden, openReportsAgainst, warnings, mutes]
+          properties:
+            threads: { type: integer, minimum: 0 }
+            replies: { type: integer, minimum: 0 }
+            hidden: { type: integer, minimum: 0 }
+            openReportsAgainst: { type: integer, minimum: 0 }
+            warnings: { type: integer, minimum: 0 }
+            mutes: { type: integer, minimum: 0 }
+        recent:
+          type: array
+          maxItems: 20
+          items: { $ref: "#/components/schemas/ModerationLogEntry" }
+
+    FilterTerm:
+      type: object
+      additionalProperties: false
+      required: [term, kind, createdAt]
+      properties:
+        term: { type: string, minLength: 2, maxLength: 60 }
+        kind: { type: string, enum: [block, review] }
+        createdAt: { type: string, format: date-time }
