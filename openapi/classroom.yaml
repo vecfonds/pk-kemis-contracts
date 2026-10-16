@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: PkKemis classroom
-  version: 1.1.0
+  version: 1.2.0
   summary: Lớp học, suất học, học sinh, bài giáo viên soạn, bài giao, làm bài và kết quả.
   description: |
     Lát A và B của M4 (docs/backend/M4-CLASSROOM.md): tạo lớp, vào lớp bằng mã, suất học và hạn dùng, mua thêm suất, gia hạn, rời lớp, xóa học sinh,
@@ -25,6 +25,12 @@ info:
     `attemptsBought`, `canBuyAttempt`, `pendingAttemptGrantId` ở `WorkSheet`; `attemptsBought` ở `WorkRun` và kết quả. `attemptLimit` giữ
     nghĩa "số lần tối đa của học sinh này ở bài này", nay là 5 cộng số lượt đã mua (vẫn null khi không giới hạn).
 
+    1.2.0 (docs/backend/M10-SOCIAL.md, lát 10c, chỉ thêm): classroom phát sự kiện lên Kafka (topic `classroom.events`, asyncapi/pkkemis.yaml
+    0.3.0, khóa bản ghi là mã lớp): học sinh vào, rời lớp; bài được giao, bị xóa; học sinh nộp bài lần đầu; lớp bị xóa. social nghe để biết
+    học sinh nào cùng lớp (lời mời "Bạn cùng lớp", gợi ý kết bạn; M13: học sinh nhắn giáo viên của lớp) và để thông báo. Thêm
+    `GET /internal/class-members` (khóa riêng của social, `socialKey`) để social dựng lại bản sao khi trống hay mất sự kiện. Không thao tác REST
+    nào đổi hành vi hay phản hồi.
+
     - Từ 1.0.0 lại chỉ thêm, không xóa hay đổi nghĩa của trường đã phát hành.
     - Token là access token của identity (xem identity.yaml); service tự kiểm bằng khóa công khai.
     - **Máy chủ quyết định** giờ, giá, số suất, hạn dùng, trạng thái lớp, số lớp dùng thử và mã lớp. Máy khách chỉ gửi ý định (số suất, loại mua); số tiền gửi lên bị bỏ qua.
@@ -47,6 +53,8 @@ tags:
     description: Lớp, mã lớp, học sinh
   - name: seats
     description: Suất học và mua suất
+  - name: internal
+    description: Chỉ service gọi nhau (X-Internal-Key); không mở ra ngoài
 
 paths:
   /v1/courses:
@@ -998,6 +1006,52 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /internal/class-members:
+    get:
+      tags: [internal]
+      operationId: listClassMembersForSocial
+      x-slice: 10c
+      x-callers: [social]
+      summary: Học sinh đang ở các lớp, theo trang (social dựng lại bản sao học sinh – lớp – giáo viên)
+      description: |
+        Mọi thành viên đang ở lớp (chưa rời) của các lớp chưa bị xóa, kể cả lớp đang tạm khóa vì hết hạn hay bị admin ẩn (vẫn là bạn cùng lớp).
+        Theo `(classId, studentId)`. `since` cùng nghĩa với `joinedAt` của `class.member_joined`: bên giữ bản sao chỉ ghi khi mốc này ≥ mốc
+        đang có, nên một trang đọc trước một lần rời lớp không làm học sinh "vào lại". Chỉ tên lớp và mã, không có tên học sinh (social có từ
+        identity). Chỉ khóa `socialKey`.
+      security:
+        - socialKey: []
+      parameters:
+        - name: after
+          in: query
+          description: "`nextAfter` của trang trước (dạng `<classId>:<studentId>`)."
+          schema: { type: string, maxLength: 80 }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 500 }
+      responses:
+        "200":
+          description: Một trang
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, nextAfter]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [classId, className, teacherId, studentId, since]
+                      properties:
+                        classId: { type: string, format: uuid }
+                        className: { type: string, minLength: 1, maxLength: 100 }
+                        teacherId: { type: string, format: uuid }
+                        studentId: { type: string, format: uuid }
+                        since: { type: string, format: date-time }
+                  nextAfter: { type: [string, "null"] }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
 components:
   securitySchemes:
     bearerAuth:
@@ -1005,6 +1059,13 @@ components:
       scheme: bearer
       bearerFormat: JWT
       description: Access token của identity (RS256).
+    socialKey:
+      type: apiKey
+      in: header
+      name: X-Internal-Key
+      description: |
+        1.2.0 (M10): khóa của social (`CLASSROOM_INTERNAL_KEY_SOCIAL`), chỉ mở `GET /internal/class-members`. Sai, thiếu, hay khóa trống: 403.
+        So sánh thời gian hằng. Thay bằng token giữa service khi có gateway.
 
   parameters:
     ClassId:

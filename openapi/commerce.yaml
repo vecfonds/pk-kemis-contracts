@@ -1,11 +1,15 @@
 openapi: 3.1.0
 info:
   title: PkKemis commerce
-  version: 0.1.0
+  version: 0.2.0
   summary: Ví Xu và sổ cái, cửa hàng khung và rương, nạp Xu (thanh toán mô phỏng), thu Xu cho service khác (mua thêm lượt làm bài).
   description: |
     0.1.0 (docs/backend/M9-COMMERCE.md): service mới, Spring Boot. Mỗi thao tác ghi lát cài nó ở `x-slice` (`9a` ví và sổ cái, `9b` cửa hàng,
     `9c` nạp mô phỏng, `9d` thu Xu cho classroom, `9g` admin, `9h` khung ở mọi nơi); trước lát đó thao tác chưa có.
+
+    0.2.0 (docs/backend/M10-SOCIAL.md, lát 10a, chỉ thêm): social cũng đọc `GET /internal/frames/equipped` (bản sao khung để vẽ khung ở trang
+    cá nhân, danh sách bạn, thông báo) bằng khóa riêng `COMMERCE_INTERNAL_KEY_SOCIAL`, chỉ được đường này. social nghe `order.paid` và
+    `wallet.changed` (loại `adjustment`) để thông báo; không có gì về tiền đổi.
 
     - Token là access token của identity (xem identity.yaml); service tự kiểm bằng khóa công khai (JWKS), không gọi identity. Người dùng là
       `sub` của token, **không bao giờ** lấy từ thân yêu cầu.
@@ -562,7 +566,7 @@ paths:
       tags: [internal]
       operationId: listEquippedFrames
       x-slice: 9h
-      x-callers: [learning]
+      x-callers: [learning, social]
       summary: Khung đang đeo của mọi người, theo trang (dựng lại bản sao)
       description: |
         Để một service giữ bản sao khung (learning cho bảng xếp hạng) dựng lại từ đầu khi bản sao trống hoặc mất sự kiện (topic chỉ giữ 7
@@ -599,9 +603,10 @@ components:
       in: header
       name: X-Internal-Key
       description: |
-        Một khóa cho mỗi bên gọi (`COMMERCE_INTERNAL_KEY_CLASSROOM`, `COMMERCE_INTERNAL_KEY_LEARNING`; arena ở M11), so sánh thời gian hằng.
-        Khóa cho biết bên gọi và việc được làm: classroom thu `class-work-attempt`; learning đọc khung đang đeo. Khóa trống thì không ai
-        vào được đường đó. Thay bằng token giữa service khi có gateway.
+        Một khóa cho mỗi bên gọi (`COMMERCE_INTERNAL_KEY_CLASSROOM`, `COMMERCE_INTERNAL_KEY_LEARNING`, từ 0.2.0 `COMMERCE_INTERNAL_KEY_SOCIAL`;
+        arena ở M11), so sánh thời gian hằng. Khóa cho biết bên gọi và việc được làm: classroom thu `class-work-attempt`; learning và social chỉ
+        đọc khung đang đeo (khóa của social thu tiền thì 403 `sku_not_allowed`). Khóa trống thì không ai vào được đường đó. Thay bằng token giữa
+        service khi có gateway.
 
   parameters:
     IdempotencyKey:

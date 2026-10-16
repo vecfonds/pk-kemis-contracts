@@ -1,0 +1,1680 @@
+openapi: 3.1.0
+info:
+  title: PkKemis social
+  version: 0.1.0
+  summary: Bạn bè, lời mời, chặn, quyền riêng tư của trang cá nhân, trang cá nhân người khác, bảng xếp hạng bạn bè, thông báo.
+  description: |
+    0.1.0 (docs/backend/M10-SOCIAL.md): service mới, NestJS. Phần 1 của social (PHASE2 M10): bạn bè, cổ vũ, chặn, quyền riêng tư của trang
+    cá nhân, trang cá nhân người khác (đã lọc theo quyền ở máy chủ), bảng xếp hạng bạn bè, "Bạn bè gần đây", thông báo trong app (hỏi lại
+    định kỳ, chưa đẩy thời gian thực), thông báo chung của admin. Cộng đồng, kiểm duyệt, ảnh (M12) và tin nhắn, WebSocket (M13) chưa có ở
+    đây. Mỗi thao tác ghi lát cài nó ở `x-slice` (`10a`…`10i`); trước lát đó thao tác chưa có.
+
+    - Token là access token của identity (xem identity.yaml); service tự kiểm bằng khóa công khai (JWKS), không gọi identity. Người gọi là
+      `sub` của token, vai trò là claim `role`; **không bao giờ** lấy người gọi từ thân yêu cầu.
+    - **Mã hồ sơ (`handle`) thay cho mã tài khoản.** Mọi người trong API này (trừ đường admin) được chỉ bằng `handle`: 12 kí tự ngẫu nhiên do
+      social cấp, cố định cho mỗi tài khoản, không suy ra được mã tài khoản. Mã tài khoản thật (UUID của identity) của người khác không bao
+      giờ có trong phản hồi cho học sinh, giáo viên (như M6 mục 18 câu 9 với bảng xếp hạng). Địa chỉ trang cá nhân ở web là
+      `/profile/<handle>`.
+    - **Chỉ học sinh kết bạn với học sinh** (docs/profile/PLAN.md mục 4.2). Giáo viên, admin không có bạn bè, lời mời, cổ vũ, gợi ý, tìm bạn
+      (403 `not_student` ở các đường đó); họ vẫn có thông báo, quyền riêng tư (phần tin nhắn, trả lời), danh sách chặn, xem được trang cá
+      nhân người khác.
+    - **Máy chủ lọc quyền riêng tư.** Phần nào người xem không được xem thì không có trong phản hồi (chỉ có `visible: false` và lý do), không
+      gửi hết rồi để web ẩn. Phần "chỉ mình" (chủ đề nên ôn, độ chính xác, thời gian học, email, ngày sinh) không bao giờ đi qua social.
+    - **Chặn không lộ.** Người bị chặn không được báo; mọi điều họ thấy đều giống trường hợp người kia không nhận lời mời hay chỉ chia sẻ
+      với chính mình (mục 4 của M10-SOCIAL.md).
+    - **Luật chế độ** (AGENTS.md mục 2.1): service chỉ trả mã và số. Thông báo là `kind` + tham số (`params`); "Bạn bè" ↔ "Đạo hữu",
+      "Cổ vũ" ↔ "Truyền linh lực", XP ↔ Tu Vi, Cấp độ ↔ Cảnh giới, Xu ↔ Linh thạch do web dịch bằng `useTerm()`. Tên lớp, tên bài do giáo viên
+      đặt và thông báo chung do admin viết lưu một lần, giống nhau ở mọi chế độ.
+    - **Thao tác lặp được tự nhiên** (gửi lại lời mời đang chờ, chấp nhận hai lần, cổ vũ lại trong ngày, chặn hai lần): trả cùng kết quả,
+      không cần `Idempotency-Key`. Riêng thông báo chung của admin nhận `Idempotency-Key` (tùy chọn) để bấm đúp không gửi hai lần cho cả
+      trường.
+    - Lỗi theo RFC 9457 (`application/problem+json`), cùng dạng với identity, có `code` ổn định và `detail` tiếng Việt.
+    - Giới hạn tần suất (chưa có gateway tới M13) do social tự giữ: 429 `too_many_requests` kèm `Retry-After`.
+    - Chỉ thêm, không xóa hay đổi nghĩa trường đã phát hành (README của contracts). Bên dùng bỏ qua trường lạ và `kind` thông báo lạ.
+servers:
+  - url: http://social:8080
+    description: Mạng Docker Compose (chưa có gateway)
+security:
+  - bearerAuth: []
+tags:
+  - name: me
+    description: Người đang đăng nhập (tóm tắt, quyền riêng tư)
+  - name: friends
+    description: Bạn bè, lời mời, cổ vũ, gợi ý, tìm bạn (học sinh)
+  - name: blocks
+    description: Danh sách chặn
+  - name: profiles
+    description: Trang cá nhân người khác, xem trang mình như người khác thấy
+  - name: board
+    description: Bảng xếp hạng bạn bè, "Bạn bè gần đây"
+  - name: notifications
+    description: Thông báo trong app
+  - name: admin
+    description: Thông báo chung, xem tình trạng xã hội của một tài khoản, nhật ký
+
+paths:
+  # ------------------------------------------------------------------ 10b: tóm tắt và quyền riêng tư
+
+  /v1/me/social:
+    get:
+      tags: [me]
+      operationId: getMySocial
+      x-slice: 10b
+      summary: Mình ở social (mọi vai trò)
+      description: |
+        Hồ sơ của mình như người khác thấy phần chung (`me`, có `handle` của mình), quyền riêng tư, số bạn và lời mời, số thông báo chưa đọc,
+        số lời mời đã gửi hôm nay. Web gọi một lần khi dựng khung trang. Tài khoản chưa có ở social (sự kiện `user.registered` chưa tới) thì
+        social hỏi identity (`/internal/users/batch`) rồi tạo, nên không bao giờ 404 với người đã đăng nhập.
+      responses:
+        "200":
+          description: Tóm tắt
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MySocial" }
+              example:
+                me:
+                  handle: k7m2q9x4ta3b
+                  fullName: Nguyễn Minh Anh
+                  avatarInitials: MA
+                  avatarUrl: null
+                  frameId: meo-con-day-leo
+                  role: student
+                  level: 7
+                  joinedOn: "2026-09-01"
+                privacy:
+                  progress: friends
+                  achievements: everyone
+                  friends: friends
+                  requestsFrom: everyone
+                  messagesFrom: everyone
+                  repliesFrom: everyone
+                  version: 1
+                  updatedAt: "2026-10-16T08:15:31.000Z"
+                counts: { friends: 2, incomingRequests: 1, outgoingRequests: 1, unreadNotifications: 3 }
+                requestsToday: { used: 1, limit: 20, resetsAt: "2026-10-16T17:00:00.000Z" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/me/privacy:
+    get:
+      tags: [me]
+      operationId: getMyProfilePrivacy
+      x-slice: 10b
+      summary: Quyền riêng tư của trang cá nhân (mọi vai trò)
+      description: |
+        Ai xem tiến độ, thành tích, danh sách bạn; ai gửi lời mời, nhắn tin, trả lời bài. Cờ "Ẩn khỏi bảng xếp hạng" **không** ở đây: vẫn ở
+        identity (`/v1/me/privacy` của identity.yaml), social giữ bản sao từ sự kiện `user.*`. Mặc định (ghi thành dòng lúc tài khoản xuất hiện
+        ở social, nên đổi mặc định về sau không áp ngược): tiến độ `friends`, thành tích `everyone`, danh sách bạn `friends`, lời mời
+        `everyone`, nhắn tin `everyone`, trả lời `everyone` (docs/profile/PLAN.md mục 5; PHASE2 câu 16).
+      responses:
+        "200":
+          description: Cài đặt
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProfilePrivacy" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    patch:
+      tags: [me]
+      operationId: updateMyProfilePrivacy
+      x-slice: 10b
+      summary: Sửa quyền riêng tư của trang cá nhân
+      description: |
+        Chỉ các trường gửi lên mới đổi; `version` tăng 1 khi có đổi thật. Có hiệu lực ngay ở mọi phản hồi sau đó (social đọc quyền lúc trả lời,
+        không đệm). `messagesFrom`, `repliesFrom` được lưu từ bây giờ nhưng chỉ áp dụng khi có tin nhắn (M13) và Cộng đồng (M12) ở máy chủ.
+        Giáo viên, admin lưu được mọi trường; chỉ `messagesFrom`, `repliesFrom` có nghĩa với họ.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ProfilePrivacyPatch" }
+      responses:
+        "200":
+          description: Cài đặt sau khi sửa
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProfilePrivacy" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  # ------------------------------------------------------------------ 10b: bạn bè, cổ vũ
+
+  /v1/me/friends:
+    get:
+      tags: [friends]
+      operationId: listMyFriends
+      x-slice: 10b
+      summary: Bạn bè của mình (học sinh)
+      description: |
+        Mọi bạn đang có hiệu lực (tối đa 300, không phân trang). Không có: người đã bị khóa, người không còn là học sinh (quan hệ giữ nguyên,
+        trở lại khi họ được mở khóa hay về học sinh), người mình đã chặn. `weeklyXp` là XP tuần này (từ learning), null khi bạn đó không chia
+        sẻ tiến độ với bạn bè hoặc learning không trả lời (`weeklyXpUnavailable`). Web xếp theo `weeklyXp`.
+      responses:
+        "200":
+          description: Bạn bè
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FriendList" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/NotStudent" }
+
+  /v1/me/friends/{handle}:
+    delete:
+      tags: [friends]
+      operationId: unfriend
+      x-slice: 10b
+      summary: Hủy kết bạn
+      description: Bên kia không được báo. Không còn là bạn thì vẫn 204. Phát `friend.removed` (lý do `unfriended`).
+      parameters:
+        - { $ref: "#/components/parameters/Handle" }
+      responses:
+        "204": { description: Không còn là bạn }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/NotStudent" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/me/friends/{handle}/cheers:
+    post:
+      tags: [friends]
+      operationId: cheerFriend
+      x-slice: 10b
+      summary: Cổ vũ một bạn (một lần mỗi ngày)
+      description: |
+        Chỉ giữa hai người đang là bạn, không ai chặn ai. Mỗi người cổ vũ một bạn tối đa một lần mỗi ngày (ngày theo giờ Việt Nam); cổ vũ lại
+        trong ngày trả 200 với lần đã có, không gửi thêm thông báo. Người được cổ vũ nhận thông báo `cheer` (gộp mọi lời cổ vũ trong ngày
+        thành một dòng khi chưa đọc). Không có chữ: chỉ là một lời khích lệ có sẵn (docs/profile/PLAN.md mục 6).
+      parameters:
+        - { $ref: "#/components/parameters/Handle" }
+      responses:
+        "200":
+          description: Đã cổ vũ bạn này hôm nay từ trước
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Cheer" }
+        "201":
+          description: Vừa cổ vũ
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Cheer" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/NotStudent" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Hai người không còn là bạn (`not_friends`)
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+
+  # ------------------------------------------------------------------ 10b: lời mời
+
+  /v1/me/friend-requests:
+    get:
+      tags: [friends]
+      operationId: listMyFriendRequests
+      x-slice: 10b
+      summary: Lời mời đến và lời mời đã gửi đang chờ (học sinh)
+      description: |
+        Chỉ lời mời đang chờ, chưa quá 30 ngày. Lời mời đã bị từ chối, hủy, hết hạn không có ở đây (người gửi không được báo bị từ chối: lời
+        mời chỉ biến mất). Lời mời từ hay tới người bị khóa, không còn là học sinh, hay có chặn giữa hai người không có.
+      responses:
+        "200":
+          description: Lời mời
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FriendRequestLists" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/NotStudent" }
+    post:
+      tags: [friends]
+      operationId: sendFriendRequest
+      x-slice: 10b
+      summary: Gửi lời mời kết bạn
+      description: |
+        Luật theo thứ tự (cùng thứ tự với `requestBlock` của `src/lib/social.ts`, cộng phần che việc bị chặn):
+        1. Gửi cho chính mình: 409 `self`. Mã không có, người bị khóa: 404 (giống nhau).
+        2. Một trong hai không phải học sinh: 403/409 `not_student`.
+        3. Mình đã chặn người đó: 409 `you_blocked`. **Người đó đã chặn mình: 409 `not_accepting`**, cùng mã và cùng chữ với trường hợp họ
+           không nhận lời mời của ai, để người bị chặn không biết.
+        4. Đã là bạn: 409 `already_friends`.
+        5. Mình đã có lời mời đang chờ tới người đó: 200 với lời mời đó (lặp được, không gửi thêm thông báo).
+        6. Người đó đã mời mình: hai người thành bạn ngay (200, `accepted: true`), như chấp nhận lời mời của họ.
+        7. Người đó đặt "Không ai": 409 `not_accepting`; đặt "Bạn cùng lớp" mà hai người không cùng lớp nào đang học: 409 `classmates_only`.
+        8. Mình đã có 300 bạn: 409 `friend_limit`; người đó đã có 300 bạn: 409 `their_friend_limit`.
+        9. Đã gửi đủ lời mời hôm nay (20; tài khoản dưới 7 ngày: 5; ngày theo giờ Việt Nam; hủy lời mời không trả lại lượt): 409 `daily_limit`
+           kèm `limit`, `resetsAt`.
+        Được thì ghi lời mời (hết hạn sau 30 ngày) và một thông báo `friend_request` cho người nhận; người nhận không nhận lại thông báo lời
+        mời từ cùng một người trong 7 ngày (lời mời vẫn hiện trong danh sách lời mời đến). Gửi dồn quá 10 lời mời trong 60 giây: 429.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [to]
+              properties:
+                to: { $ref: "#/components/schemas/Handle" }
+      responses:
+        "200":
+          description: "Đã có lời mời đang chờ (gửi lại), hoặc người kia đã mời mình nên hai người thành bạn (`accepted: true`)"
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SendRequestResult" }
+        "201":
+          description: Lời mời mới
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SendRequestResult" }
+              example:
+                accepted: false
+                request:
+                  id: 2b9d6f1e-4c3a-4e8b-9f70-5a1c2d3e4f60
+                  person:
+                    handle: p3n8w1v6rz0c
+                    fullName: Đỗ Thanh Tâm
+                    avatarInitials: TT
+                    avatarUrl: null
+                    frameId: null
+                    role: student
+                    level: 5
+                    joinedOn: "2026-09-03"
+                  createdAt: "2026-10-16T12:00:00.000Z"
+                  expiresAt: "2026-11-15T12:00:00.000Z"
+                  classmate: { className: 10A1 }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/NotStudent" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: |
+            Không gửi được: `self`, `not_student`, `you_blocked`, `already_friends`, `not_accepting`, `classmates_only`, `friend_limit`,
+            `their_friend_limit`, `daily_limit` (kèm `limit`, `resetsAt`)
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+              example:
+                title: Không gửi được lời mời
+                status: 409
+                code: not_accepting
+                detail: Bạn ấy không nhận lời mời kết bạn.
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+
+  /v1/me/friend-requests/{requestId}/accept:
+    post:
+      tags: [friends]
+      operationId: acceptFriendRequest
+      x-slice: 10b
+      summary: Chấp nhận một lời mời đến
+      description: |
+        Trong một giao dịch: khóa hai người (theo thứ tự mã), kiểm lại 300 bạn của cả hai, ghi tình bạn (một dòng mỗi cặp), xóa thông báo
+        `friend_request` của lời mời này, thông báo `friend_accepted` cho người gửi, phát `friend.added`. Chấp nhận lại lời mời đã chấp nhận:
+        200 với tình bạn đó. Lời mời không còn (hủy, hết hạn, có chặn, người gửi bị khóa): 404 `request_gone`.
+      parameters:
+        - { $ref: "#/components/parameters/RequestId" }
+      responses:
+        "200":
+          description: Hai người là bạn
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Friend" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/NotStudent" }
+        "404":
+          description: Lời mời không có, không gửi cho mình, hoặc không còn (`request_gone`)
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "409":
+          description: Một trong hai đã có 300 bạn (`friend_limit`, `their_friend_limit`)
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /v1/me/friend-requests/{requestId}/decline:
+    post:
+      tags: [friends]
+      operationId: declineFriendRequest
+      x-slice: 10b
+      summary: Từ chối một lời mời đến
+      description: |
+        Người gửi không được báo; lời mời biến mất ở cả hai bên, thông báo của nó bị xóa. Gợi ý kết bạn của người gửi không có mình trong 30
+        ngày. Lặp được: lời mời đã không còn thì vẫn 204.
+      parameters:
+        - { $ref: "#/components/parameters/RequestId" }
+      responses:
+        "204": { description: Đã từ chối }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/NotStudent" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/me/friend-requests/{requestId}:
+    delete:
+      tags: [friends]
+      operationId: cancelFriendRequest
+      x-slice: 10b
+      summary: Hủy lời mời mình đã gửi
+      description: Thông báo của lời mời bên người nhận bị xóa. Lượt gửi trong ngày không được trả lại. Lặp được.
+      parameters:
+        - { $ref: "#/components/parameters/RequestId" }
+      responses:
+        "204": { description: Đã hủy }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/NotStudent" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/me/friend-suggestions:
+    get:
+      tags: [friends]
+      operationId: listFriendSuggestions
+      x-slice: 10b
+      summary: Người mình có thể biết (học sinh)
+      description: |
+        Bạn cùng lớp (cùng một lớp đang học, từ bản sao của classroom; có từ lát 10c) và bạn của bạn (ít nhất 2 bạn chung, chỉ tính qua những
+        bạn chia sẻ danh sách bạn với bạn bè). Xếp như `suggestFriends` của web: bạn chung × 3 + cùng lớp × 2. Không gợi ý: người đã là bạn
+        hay đang có lời mời, người có chặn với mình (hai chiều), người bị khóa, người không nhận lời mời của mình ("Không ai", hay "Bạn cùng
+        lớp" khi không cùng lớp), người đã từ chối lời mời của mình trong 30 ngày. "Người từng trả lời câu hỏi của mình" thêm ở M12.
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 20, default: 10 }
+      responses:
+        "200":
+          description: Gợi ý
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    maxItems: 20
+                    items: { $ref: "#/components/schemas/Suggestion" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/NotStudent" }
+
+  /v1/people/search:
+    get:
+      tags: [friends]
+      operationId: searchPeople
+      x-slice: 10b
+      summary: Tìm học sinh theo tên (học sinh)
+      description: |
+        So không dấu, không phân biệt hoa thường (PostgreSQL `unaccent`, đầu mỗi từ của tên). Chống dò danh sách học sinh:
+        - ít nhất 2 kí tự chữ hoặc số sau khi bỏ khoảng trắng; tối đa 20 kết quả, không phân trang;
+        - chỉ học sinh không bị khóa, không phải mình, không có chặn với mình (hai chiều);
+        - người không nhận lời mời của mình ("Không ai", hay "Bạn cùng lớp" khi không cùng lớp) chỉ hiện khi đã là bạn hoặc đang có lời mời
+          giữa hai người;
+        - mỗi người tối đa 30 lần tìm mỗi phút và 500 lần mỗi ngày (429).
+        Kết quả chỉ có thẻ người và quan hệ, không có số bạn chung.
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema: { type: string, minLength: 2, maxLength: 50 }
+      responses:
+        "200":
+          description: Kết quả
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    maxItems: 20
+                    items: { $ref: "#/components/schemas/SearchHit" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/NotStudent" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+
+  # ------------------------------------------------------------------ 10b: chặn
+
+  /v1/me/blocks:
+    get:
+      tags: [blocks]
+      operationId: listMyBlocks
+      x-slice: 10b
+      summary: Người mình đã chặn (mọi vai trò)
+      description: Mới chặn trước. Người đã chặn mình không bao giờ có ở đâu.
+      responses:
+        "200":
+          description: Danh sách
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Block" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/me/blocks/{handle}:
+    put:
+      tags: [blocks]
+      operationId: blockPerson
+      x-slice: 10b
+      summary: Chặn một người
+      description: |
+        Mọi vai trò chặn được mọi người trừ admin (409 `cannot_block_admin`) và chính mình (409 `self`). Trong một giao dịch: ghi chặn, hủy tình
+        bạn nếu có (`friend.removed` lý do `blocked`), hủy mọi lời mời giữa hai người, xóa các thông báo bạn bè giữa hai người (lời mời, chấp
+        nhận, cổ vũ, cả hai chiều), phát `user.blocked`. Người bị chặn không được báo. Thông báo của lớp học (bài được giao) không bị chặn ảnh
+        hưởng. Chặn lại người đã chặn: 204.
+      parameters:
+        - { $ref: "#/components/parameters/Handle" }
+      responses:
+        "204": { description: Đã chặn }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "`self`, `cannot_block_admin`"
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+    delete:
+      tags: [blocks]
+      operationId: unblockPerson
+      x-slice: 10b
+      summary: Bỏ chặn
+      description: Không khôi phục tình bạn hay lời mời đã hủy. Phát `user.unblocked`. Không chặn thì vẫn 204.
+      parameters:
+        - { $ref: "#/components/parameters/Handle" }
+      responses:
+        "204": { description: Đã bỏ chặn }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # ------------------------------------------------------------------ 10f: trang cá nhân
+
+  /v1/profiles/{handle}:
+    get:
+      tags: [profiles]
+      operationId: getProfile
+      x-slice: 10f
+      summary: Trang cá nhân của một người, chỉ phần người xem được xem (mọi vai trò)
+      description: |
+        Quan hệ của người xem với người này quyết định từng phần (docs/profile/PLAN.md mục 5, M10-SOCIAL.md mục 4):
+        - **Phần chung** (`person`: tên, ảnh, khung, cấp độ, ngày tham gia) ai cũng thấy.
+        - **Tiến độ, thành tích, danh sách bạn** theo quyền của chủ trang: `everyone`, `friends` (người xem là bạn), `me` (không ai khác).
+        - **Admin** thấy đủ ba phần dù chủ trang chọn gì (`adminView: true`); không bao giờ có phần "chỉ mình".
+        - **Giáo viên** xem như người lạ.
+        - **Người bị chủ trang chặn** thấy như mọi phần đều là "chỉ mình" (`reason: only_me`) và không gửi được lời mời (`not_accepting`).
+        - **Người xem đã chặn chủ trang**: `blockedByMe: true`, ba phần ẩn với lý do `blocked`.
+        - Chủ trang là giáo viên, admin: `parts` là null (chỉ có thẻ người).
+        - Mã không có, hay người bị khóa (trừ khi người xem là admin): 404, giống nhau.
+        Tiến độ do learning cung cấp (đường nội bộ, social chỉ gọi khi người xem được xem); learning không trả lời thì phần tiến độ
+        `visible: true, unavailable: true` không có số liệu. Mỗi người tối đa 120 lần xem trang mỗi phút (429).
+      parameters:
+        - { $ref: "#/components/parameters/Handle" }
+      responses:
+        "200":
+          description: Trang đã lọc
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProfileView" }
+              examples:
+                nguoiLa:
+                  summary: Một học sinh lạ xem trang của Minh Anh (tiến độ chỉ cho bạn bè, thành tích cho mọi người)
+                  value:
+                    person:
+                      handle: k7m2q9x4ta3b
+                      fullName: Nguyễn Minh Anh
+                      avatarInitials: MA
+                      avatarUrl: null
+                      frameId: meo-con-day-leo
+                      role: student
+                      level: 7
+                      joinedOn: "2026-09-01"
+                    relation: none
+                    blockedByMe: false
+                    adminView: false
+                    requestBlock: null
+                    canCheer: false
+                    cheeredToday: false
+                    parts:
+                      progress: { visible: false, reason: friends_only }
+                      achievements:
+                        visible: true
+                        count: 2
+                        unlocked:
+                          - { achievementId: a-streak-7, unlockedAt: "2026-09-18T12:00:00.000Z" }
+                          - { achievementId: a-ch1, unlockedAt: "2026-08-20T13:10:00.000Z" }
+                      friends: { visible: false, reason: friends_only }
+                banBe:
+                  summary: Một người bạn xem trang của Minh Anh
+                  value:
+                    person:
+                      handle: k7m2q9x4ta3b
+                      fullName: Nguyễn Minh Anh
+                      avatarInitials: MA
+                      avatarUrl: null
+                      frameId: meo-con-day-leo
+                      role: student
+                      level: 7
+                      joinedOn: "2026-09-01"
+                    relation: friend
+                    blockedByMe: false
+                    adminView: false
+                    requestBlock: already_friends
+                    canCheer: true
+                    cheeredToday: false
+                    parts:
+                      progress:
+                        visible: true
+                        unavailable: false
+                        data:
+                          level: 7
+                          totalXp: 8250
+                          weeklyXp: 340
+                          monthlyXp: 1210
+                          streakDays: 12
+                          longestStreakDays: 19
+                          course: { courseId: hoa-hoc-10, lessonsCompleted: 13, lessonsTotal: 26 }
+                          activity:
+                            - { date: "2026-10-15", xp: 120 }
+                            - { date: "2026-10-16", xp: 85 }
+                          mastery:
+                            - { chapterId: c1, percent: 92 }
+                            - { chapterId: c2, percent: 78 }
+                        weeklyFriendRank: { rank: 1, total: 3 }
+                      achievements:
+                        visible: true
+                        count: 1
+                        unlocked:
+                          - { achievementId: a-streak-7, unlockedAt: "2026-09-18T12:00:00.000Z" }
+                      friends:
+                        visible: true
+                        total: 2
+                        items:
+                          - { handle: b4c8d2e6f0a1, fullName: Lê Bảo Ngọc, avatarInitials: BN, avatarUrl: null, frameId: null, role: student, level: 8, joinedOn: "2026-08-30" }
+                        mutual:
+                          count: 1
+                          items:
+                            - { handle: b4c8d2e6f0a1, fullName: Lê Bảo Ngọc, avatarInitials: BN, avatarUrl: null, frameId: null, role: student, level: 8, joinedOn: "2026-08-30" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+
+  /v1/profiles/{handle}/friends:
+    get:
+      tags: [profiles]
+      operationId: getProfileFriends
+      x-slice: 10f
+      summary: Toàn bộ danh sách bạn của một người, nếu người xem được xem
+      description: |
+        Cùng luật với phần `friends` của `GET /v1/profiles/{handle}` (tối đa 300, xếp theo tên). Không được xem: 200 với `visible: false` và lý
+        do. Người bị khóa, không còn là học sinh, có chặn với người xem (hai chiều) không có trong danh sách.
+      parameters:
+        - { $ref: "#/components/parameters/Handle" }
+      responses:
+        "200":
+          description: Danh sách hoặc lý do bị ẩn
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FriendsPart" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+
+  /v1/me/profile-preview:
+    get:
+      tags: [profiles]
+      operationId: previewMyProfile
+      x-slice: 10f
+      summary: Trang của mình dưới mắt một người bạn hay một người lạ (học sinh)
+      description: |
+        Nút "Xem như người khác thấy" (docs/profile/PLAN.md mục 3.2): cùng bộ lọc với `GET /v1/profiles/{handle}`, áp cho một người xem giả
+        định là bạn (`as=friend`) hay người lạ (`as=stranger`), nên điều học sinh thấy ở đây đúng là điều máy chủ gửi cho người khác.
+      parameters:
+        - name: as
+          in: query
+          required: true
+          schema: { type: string, enum: [friend, stranger] }
+      responses:
+        "200":
+          description: Trang đã lọc
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProfileView" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/NotStudent" }
+
+  # ------------------------------------------------------------------ 10f: bảng xếp hạng bạn bè, tin vui
+
+  /v1/me/friend-board:
+    get:
+      tags: [board]
+      operationId: getFriendBoard
+      x-slice: 10f
+      summary: Bảng xếp hạng bạn bè trong một kỳ (học sinh)
+      description: |
+        Mình và các bạn theo XP trong kỳ, như `friendsBoard` của web: chỉ bạn chia sẻ tiến độ với bạn bè (`progress` là `everyone` hoặc
+        `friends`), không bật "Ẩn khỏi bảng xếp hạng", không bị khóa, không có chặn với mình. Mình bật ẩn thì không có dòng của mình
+        (`meHidden: true`; vẫn thấy bảng của bạn bè). XP, cấp và XP kỳ trước lấy từ learning (đường nội bộ); kỳ `week` từ 00:00 thứ Hai,
+        `month` từ ngày 1 (giờ Việt Nam), `all` mọi thời gian. Hạng = 1 + số người nhiều XP hơn; người 0 XP trong kỳ vẫn có dòng (khác bảng
+        chung). `rankChange` so với hạng trong cùng nhóm người này ở kỳ trước (`all`: lúc đầu tuần), null khi kỳ trước không ai có XP.
+        learning không trả lời: `unavailable: true`, `entries` rỗng.
+      parameters:
+        - name: period
+          in: query
+          required: true
+          schema: { type: string, enum: [week, month, all] }
+      responses:
+        "200":
+          description: Bảng
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FriendBoard" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/NotStudent" }
+
+  /v1/me/friend-news:
+    get:
+      tags: [board]
+      operationId: getFriendNews
+      x-slice: 10f
+      summary: Bạn bè gần đây (học sinh)
+      description: |
+        Chỉ tin vui của 7 ngày gần nhất (docs/profile/PLAN.md mục 6): đạt thành tích (khi bạn đó chia sẻ thành tích với bạn bè), chuỗi 7/30/100
+        ngày và hoàn thành chương (khi chia sẻ tiến độ với bạn bè), lên cấp (cấp độ ai cũng thấy). Lọc theo quyền **lúc đọc**, nên bạn đó đổi
+        quyền thì tin cũ cũng theo. Không bao giờ có điểm bài, câu sai. Mới nhất trước.
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 50, default: 20 }
+      responses:
+        "200":
+          description: Tin
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    maxItems: 50
+                    items: { $ref: "#/components/schemas/FriendNewsItem" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/NotStudent" }
+
+  # ------------------------------------------------------------------ 10g: thông báo
+
+  /v1/me/summary:
+    get:
+      tags: [notifications]
+      operationId: getMySummary
+      x-slice: 10g
+      summary: Số thông báo chưa đọc và số lời mời đến (mọi vai trò; web hỏi lại mỗi 60 giây)
+      description: |
+        Đường nhẹ cho chuông và số trên mục Trang cá nhân ở menu: web hỏi lại mỗi 60 giây khi tab đang mở (PHASE2 câu 13; đẩy thời gian thực ở
+        M13). `ETag` đổi khi một trong hai số đổi hoặc có thông báo mới; gửi `If-None-Match` đúng thì nhận 304 không có thân.
+      parameters:
+        - { $ref: "#/components/parameters/IfNoneMatch" }
+      responses:
+        "200":
+          description: Số liệu
+          headers:
+            ETag: { $ref: "#/components/headers/ETag" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Summary" }
+        "304": { description: Không đổi so với `If-None-Match` }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/me/notifications:
+    get:
+      tags: [notifications]
+      operationId: listMyNotifications
+      x-slice: 10g
+      summary: Thông báo của mình, mới nhất trước (mọi vai trò)
+      description: |
+        Mỗi thông báo là `kind` + `params` (mã, số, và tên do người dùng đặt chụp lúc tạo như tên lớp, tên bài), cộng người gây ra (`actor`,
+        đọc mới lúc trả lời, nên đổi tên là thấy tên mới). Web dựng câu chữ theo chế độ (`notificationText`) và đường dẫn. Một số loại gộp
+        nhiều sự kiện vào một dòng khi dòng đó chưa đọc (`count`, `actors` tối đa 3 người gần nhất): cổ vũ trong ngày, học sinh vào lớp, học
+        sinh nộp bài. Thông báo có người gây ra đã bị khóa, hay có chặn giữa hai người (với các loại bạn bè), không hiện. Giữ 90 ngày, mỗi người
+        tối đa 500 dòng. Con trỏ theo `(updatedAt, id)`. Hỗ trợ `If-None-Match` ở trang đầu.
+      parameters:
+        - { $ref: "#/components/parameters/Cursor" }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 50, default: 20 }
+        - { $ref: "#/components/parameters/IfNoneMatch" }
+      responses:
+        "200":
+          description: Một trang
+          headers:
+            ETag: { $ref: "#/components/headers/ETag" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationPage" }
+              example:
+                unread: 2
+                nextCursor: null
+                items:
+                  - id: 5f1e2d3c-4b5a-4968-8776-655443322110
+                    kind: friend_request
+                    createdAt: "2026-10-16T12:00:01.000Z"
+                    updatedAt: "2026-10-16T12:00:01.000Z"
+                    read: false
+                    count: 1
+                    actor: { handle: p3n8w1v6rz0c, fullName: Đỗ Thanh Tâm, avatarInitials: TT, avatarUrl: null, frameId: null, role: student, level: 5, joinedOn: "2026-09-03" }
+                    actors: []
+                    params: { requestId: 2b9d6f1e-4c3a-4e8b-9f70-5a1c2d3e4f60 }
+                  - id: 6a2f3e4d-5c6b-4a79-9887-766554433221
+                    kind: assignment_created
+                    createdAt: "2026-10-16T07:30:00.000Z"
+                    updatedAt: "2026-10-16T07:30:00.000Z"
+                    read: false
+                    count: 1
+                    actor: { handle: t9h5c2j7m1q8, fullName: Trần Thu Hà, avatarInitials: TH, avatarUrl: null, frameId: null, role: teacher, level: null, joinedOn: "2026-08-01" }
+                    actors: []
+                    params:
+                      classId: 1c2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f
+                      className: 10A1
+                      assignmentId: 7d8e9f0a-1b2c-4d3e-8f4a-5b6c7d8e9f0a
+                      workId: 3e4f5a6b-7c8d-4e9f-a0b1-c2d3e4f5a6b7
+                      workKind: exercise
+                      workTitle: Ôn tập số oxi hóa
+                      dueAt: "2026-10-20T16:59:59.000Z"
+                  - id: 7b3a4f5e-6d7c-4b8a-a998-877665544332
+                    kind: level_up
+                    createdAt: "2026-10-15T13:02:00.000Z"
+                    updatedAt: "2026-10-15T13:02:00.000Z"
+                    read: true
+                    count: 1
+                    actor: null
+                    actors: []
+                    params: { level: 7 }
+        "304": { description: Không đổi so với `If-None-Match` }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/me/notifications/read:
+    post:
+      tags: [notifications]
+      operationId: markNotificationsRead
+      x-slice: 10g
+      summary: Đánh dấu đã đọc
+      description: |
+        `ids` (tối đa 100, mã không phải của mình bị bỏ qua) hoặc `all: true` (mọi thông báo tới lúc gọi). Dòng gộp đã đọc thì sự kiện sau mở
+        một dòng mới. Trả số chưa đọc còn lại.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              minProperties: 1
+              maxProperties: 1
+              properties:
+                ids:
+                  type: array
+                  minItems: 1
+                  maxItems: 100
+                  uniqueItems: true
+                  items: { type: string, format: uuid }
+                all: { type: boolean, const: true }
+      responses:
+        "200":
+          description: Đã đánh dấu
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [unread]
+                properties:
+                  unread: { type: integer, minimum: 0 }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  # ------------------------------------------------------------------ 10g, 10i: admin
+
+  /v1/admin/announcements:
+    get:
+      tags: [admin]
+      operationId: listAnnouncements
+      x-slice: 10g
+      summary: Thông báo chung đã gửi (admin)
+      parameters:
+        - { $ref: "#/components/parameters/Cursor" }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 50, default: 20 }
+      responses:
+        "200":
+          description: Một trang, mới nhất trước
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AnnouncementPage" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [admin]
+      operationId: createAnnouncement
+      x-slice: 10g
+      summary: Gửi thông báo chung (admin)
+      description: |
+        Một dòng thông báo `announcement` cho mọi tài khoản của nhóm nhận (`students`, `teachers`, `everyone` = học sinh và giáo viên) đang có
+        ở social và không bị khóa, ghi trong một câu lệnh cùng giao dịch với thông báo chung và dòng nhật ký. Chữ do admin viết, lưu một lần,
+        giống nhau ở mọi chế độ. Tối đa 10 thông báo chung mỗi ngày (409 `daily_limit`). `Idempotency-Key` (tùy chọn): cùng mã trong 24 giờ trả
+        lại thông báo đã gửi, không gửi lần hai; cùng mã khác nội dung: 422 `idempotency_mismatch`.
+      parameters:
+        - { $ref: "#/components/parameters/OptionalIdempotencyKey" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AnnouncementRequest" }
+      responses:
+        "200":
+          description: Đã gửi từ trước với cùng `Idempotency-Key`
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Announcement" }
+        "201":
+          description: Đã gửi
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Announcement" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409":
+          description: Đã gửi đủ 10 thông báo chung hôm nay (`daily_limit`)
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422":
+          description: Cùng `Idempotency-Key`, nội dung khác (`idempotency_mismatch`)
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /v1/admin/announcements/{announcementId}:
+    delete:
+      tags: [admin]
+      operationId: retractAnnouncement
+      x-slice: 10g
+      summary: Thu hồi thông báo chung (admin)
+      description: Xóa mọi dòng thông báo của nó ở chuông của mọi người; thông báo chung còn trong danh sách của admin với `retractedAt`. Ghi nhật ký. Lặp được.
+      parameters:
+        - name: announcementId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "204": { description: Đã thu hồi }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/admin/users/{userId}/social:
+    get:
+      tags: [admin]
+      operationId: getUserSocialForAdmin
+      x-slice: 10i
+      summary: Tình trạng xã hội của một tài khoản (admin)
+      description: |
+        Cho nút "Xã hội" ở `/admin/users`: mã hồ sơ (để mở trang cá nhân với `adminView`), quyền riêng tư, số bạn, số lời mời chờ, số người đã
+        chặn và số người chặn người này, số lời mời đã gửi hôm nay. Chỉ số đếm: không có danh sách ai chặn ai. Chỉ đọc, không ghi nhật ký
+        (M10 câu 4). Tài khoản chưa có ở social: 404.
+      parameters:
+        - { $ref: "#/components/parameters/UserId" }
+      responses:
+        "200":
+          description: Tình trạng
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminUserSocial" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/admin/audit-log:
+    get:
+      tags: [admin]
+      operationId: getSocialAuditLog
+      x-slice: 10i
+      summary: Nhật ký thao tác admin ở social
+      description: Gửi và thu hồi thông báo chung. Cùng cách phân trang như nhật ký của classroom, commerce; web gộp thành nguồn "Xã hội" ở `/admin/audit`.
+      parameters:
+        - { $ref: "#/components/parameters/Cursor" }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+      responses:
+        "200":
+          description: Một trang, mới nhất trước
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuditPage" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Access token của identity (RS256). `sub` là người gọi, `role` là vai trò.
+
+  parameters:
+    Handle:
+      name: handle
+      in: path
+      required: true
+      description: Mã hồ sơ của người đó (không phải mã tài khoản).
+      schema: { $ref: "#/components/schemas/Handle" }
+    RequestId:
+      name: requestId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    UserId:
+      name: userId
+      in: path
+      required: true
+      description: Mã tài khoản (identity). Chỉ đường admin nhận mã này.
+      schema: { type: string, format: uuid }
+    Cursor:
+      name: cursor
+      in: query
+      description: Con trỏ `nextCursor` của trang trước; bỏ trống là trang đầu.
+      schema: { type: string, maxLength: 200 }
+    IfNoneMatch:
+      name: If-None-Match
+      in: header
+      required: false
+      description: ETag đã có; trùng thì nhận 304.
+      schema: { type: string, maxLength: 100 }
+    OptionalIdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: Một mã cho mỗi lần bấm "Gửi" (web dùng UUID); gửi lại đúng mã khi thử lại sau lỗi mạng. Giữ 24 giờ, phạm vi là người gọi.
+      schema: { type: string, pattern: "^[A-Za-z0-9_-]{8,100}$" }
+
+  headers:
+    ETag:
+      description: Phiên bản của dữ liệu trả về, trong ngoặc kép.
+      schema: { type: string }
+    RetryAfter:
+      description: Số giây nên chờ trước khi thử lại.
+      schema: { type: integer, minimum: 1 }
+
+  responses:
+    ValidationFailed:
+      description: Dữ liệu gửi lên không hợp lệ (`validation_failed`), kèm lỗi từng trường
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    Unauthorized:
+      description: Chưa đăng nhập hoặc token không hợp lệ / hết hạn (`token_invalid`)
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    Forbidden:
+      description: Không phải admin (`forbidden`)
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    NotStudent:
+      description: Đường này chỉ dành cho học sinh (`not_student`)
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    NotFound:
+      description: |
+        Không có (`not_found`). Mã hồ sơ không tồn tại và người bị khóa trả cùng một lỗi, để không dò được ai bị khóa.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    TooManyRequests:
+      description: Quá nhiều yêu cầu (`too_many_requests`); chờ theo `Retry-After`
+      headers:
+        Retry-After: { $ref: "#/components/headers/RetryAfter" }
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+
+  schemas:
+    Problem:
+      type: object
+      description: Lỗi theo RFC 9457. Cùng dạng với identity; có thêm các mã và trường của service này.
+      required: [title, status, code]
+      properties:
+        type: { type: string, default: about:blank }
+        title: { type: string }
+        status: { type: integer }
+        code:
+          type: string
+          enum:
+            - validation_failed
+            - token_invalid
+            - forbidden
+            - not_found
+            - internal_error
+            - too_many_requests
+            - not_student
+            - self
+            - you_blocked
+            - already_friends
+            - not_accepting
+            - classmates_only
+            - friend_limit
+            - their_friend_limit
+            - daily_limit
+            - not_friends
+            - request_gone
+            - cannot_block_admin
+            - idempotency_mismatch
+        detail: { type: string, description: "Thông báo tiếng Việt, hiển thị được cho người dùng." }
+        limit: { type: integer, minimum: 1, description: "Chỉ `daily_limit`: số lời mời (hay thông báo chung) tối đa mỗi ngày của người gọi." }
+        resetsAt: { type: string, format: date-time, description: "Chỉ `daily_limit`: lúc ngày mới bắt đầu (00:00 giờ Việt Nam)." }
+        errors:
+          type: array
+          description: Chỉ `validation_failed`.
+          items:
+            type: object
+            required: [field, message]
+            properties:
+              field: { type: string }
+              message: { type: string }
+
+    Handle:
+      type: string
+      pattern: "^[0-9a-z]{12}$"
+      description: |
+        Mã hồ sơ: 12 kí tự `0-9a-z` ngẫu nhiên (bộ sinh số ngẫu nhiên an toàn), social cấp khi tài khoản xuất hiện lần đầu, không đổi, không
+        suy ra được mã tài khoản hay thứ tự đăng ký.
+
+    Role:
+      type: string
+      enum: [student, teacher, admin]
+
+    Audience:
+      type: string
+      enum: [everyone, friends, me]
+      description: Ai xem được một phần của trang cá nhân. `friends` = người đang là bạn; `me` = không ai khác (admin vẫn xem được).
+
+    Person:
+      type: object
+      additionalProperties: false
+      description: |
+        Thẻ một người, phần ai cũng thấy (docs/profile/PLAN.md mục 5). Tên, ảnh, vai trò từ bản sao của identity; khung từ commerce; cấp độ từ
+        learning. Không bao giờ có email, ngày sinh, mã tài khoản.
+      required: [handle, fullName, avatarInitials, avatarUrl, frameId, role, level, joinedOn]
+      properties:
+        handle: { $ref: "#/components/schemas/Handle" }
+        fullName: { type: string, minLength: 1, maxLength: 80 }
+        avatarInitials: { type: string, maxLength: 4, description: Chữ cái đầu của hai từ cuối của tên. }
+        avatarUrl: { type: [string, "null"], maxLength: 500 }
+        frameId: { type: [string, "null"], pattern: "^[\\w-]{1,80}$", description: Khung đang đeo (chỉ mã; ảnh ở web). }
+        role: { $ref: "#/components/schemas/Role" }
+        level: { type: [integer, "null"], minimum: 1, description: "Cấp độ (học sinh); null với giáo viên, admin, hay khi social chưa biết." }
+        joinedOn: { type: [string, "null"], format: date, description: Ngày tham gia (giờ Việt Nam); null khi social chưa biết. }
+
+    ProfilePrivacy:
+      type: object
+      additionalProperties: false
+      required: [progress, achievements, friends, requestsFrom, messagesFrom, repliesFrom, version, updatedAt]
+      properties:
+        progress: { $ref: "#/components/schemas/Audience" }
+        achievements: { $ref: "#/components/schemas/Audience" }
+        friends: { $ref: "#/components/schemas/Audience" }
+        requestsFrom:
+          type: string
+          enum: [everyone, classmates, nobody]
+          description: Ai gửi lời mời kết bạn được. `classmates` = học sinh cùng một lớp đang học.
+        messagesFrom:
+          type: string
+          enum: [everyone, friends, nobody]
+          description: |
+            Ai nhắn tin được (áp dụng từ M13). `nobody` = chỉ admin; giáo viên của lớp mình và admin luôn nhắn được
+            (docs/profile/PLAN.md mục 4.3).
+        repliesFrom:
+          type: string
+          enum: [everyone, nobody]
+          description: Ai trả lời, bình luận bài mình đăng ở Cộng đồng (áp dụng từ M12). `nobody` = chỉ admin.
+        version: { type: integer, format: int64, minimum: 1, description: Tăng 1 mỗi lần một trường đổi. }
+        updatedAt: { type: string, format: date-time }
+
+    ProfilePrivacyPatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        progress: { $ref: "#/components/schemas/Audience" }
+        achievements: { $ref: "#/components/schemas/Audience" }
+        friends: { $ref: "#/components/schemas/Audience" }
+        requestsFrom: { type: string, enum: [everyone, classmates, nobody] }
+        messagesFrom: { type: string, enum: [everyone, friends, nobody] }
+        repliesFrom: { type: string, enum: [everyone, nobody] }
+
+    MySocial:
+      type: object
+      additionalProperties: false
+      required: [me, privacy, counts, requestsToday]
+      properties:
+        me: { $ref: "#/components/schemas/Person" }
+        privacy: { $ref: "#/components/schemas/ProfilePrivacy" }
+        counts:
+          type: object
+          additionalProperties: false
+          required: [friends, incomingRequests, outgoingRequests, unreadNotifications]
+          properties:
+            friends: { type: integer, minimum: 0, maximum: 300 }
+            incomingRequests: { type: integer, minimum: 0 }
+            outgoingRequests: { type: integer, minimum: 0 }
+            unreadNotifications: { type: integer, minimum: 0 }
+        requestsToday:
+          type: object
+          additionalProperties: false
+          description: Lời mời đã gửi hôm nay (giờ Việt Nam). Giáo viên, admin luôn 0/0.
+          required: [used, limit, resetsAt]
+          properties:
+            used: { type: integer, minimum: 0 }
+            limit: { type: integer, minimum: 0, description: "20; tài khoản dưới 7 ngày: 5." }
+            resetsAt: { type: string, format: date-time }
+
+    Summary:
+      type: object
+      additionalProperties: false
+      required: [unreadNotifications, incomingRequests, latestNotificationAt]
+      properties:
+        unreadNotifications: { type: integer, minimum: 0 }
+        incomingRequests: { type: integer, minimum: 0, description: "Lời mời kết bạn đến đang chờ (giáo viên, admin luôn 0)." }
+        latestNotificationAt: { type: [string, "null"], format: date-time, description: "`updatedAt` mới nhất trong thông báo của mình." }
+
+    Classmate:
+      type: [object, "null"]
+      additionalProperties: false
+      description: Một lớp hai người cùng đang học (tên do giáo viên đặt); null khi không cùng lớp nào.
+      required: [className]
+      properties:
+        className: { type: string, minLength: 1, maxLength: 100 }
+
+    Friend:
+      type: object
+      additionalProperties: false
+      required: [person, since]
+      properties:
+        person: { $ref: "#/components/schemas/Person" }
+        since: { type: string, format: date-time }
+
+    FriendList:
+      type: object
+      additionalProperties: false
+      required: [items, weeklyXpUnavailable]
+      properties:
+        items:
+          type: array
+          maxItems: 300
+          items:
+            type: object
+            additionalProperties: false
+            required: [person, since, cheeredToday, weeklyXp]
+            properties:
+              person: { $ref: "#/components/schemas/Person" }
+              since: { type: string, format: date-time }
+              cheeredToday: { type: boolean, description: Mình đã cổ vũ bạn này hôm nay. }
+              weeklyXp: { type: [integer, "null"], minimum: 0 }
+        weeklyXpUnavailable: { type: boolean, description: learning không trả lời; mọi `weeklyXp` là null. }
+
+    Cheer:
+      type: object
+      additionalProperties: false
+      required: [to, cheeredOn, at]
+      properties:
+        to: { $ref: "#/components/schemas/Handle" }
+        cheeredOn: { type: string, format: date, description: Ngày theo giờ Việt Nam. }
+        at: { type: string, format: date-time }
+
+    FriendRequest:
+      type: object
+      additionalProperties: false
+      description: Lời mời đang chờ. `person` là người bên kia (người gửi với lời mời đến, người nhận với lời mời đã gửi).
+      required: [id, person, createdAt, expiresAt, classmate]
+      properties:
+        id: { type: string, format: uuid }
+        person: { $ref: "#/components/schemas/Person" }
+        createdAt: { type: string, format: date-time }
+        expiresAt: { type: string, format: date-time, description: "`createdAt` + 30 ngày." }
+        classmate: { $ref: "#/components/schemas/Classmate" }
+
+    FriendRequestLists:
+      type: object
+      additionalProperties: false
+      required: [incoming, outgoing]
+      properties:
+        incoming:
+          type: array
+          items: { $ref: "#/components/schemas/FriendRequest" }
+        outgoing:
+          type: array
+          items: { $ref: "#/components/schemas/FriendRequest" }
+
+    SendRequestResult:
+      type: object
+      additionalProperties: false
+      description: "`accepted: false` kèm `request` (lời mời mới hay đang chờ); `accepted: true` kèm `friend` (người kia đã mời mình trước)."
+      required: [accepted]
+      properties:
+        accepted: { type: boolean }
+        request: { $ref: "#/components/schemas/FriendRequest" }
+        friend: { $ref: "#/components/schemas/Friend" }
+
+    Relation:
+      type: string
+      enum: [self, friend, incoming, outgoing, none]
+      description: "`incoming`: người kia đã mời mình; `outgoing`: mình đã mời người kia. Có chặn (hai chiều) thì là `none`."
+
+    RequestBlock:
+      type: [string, "null"]
+      enum: [self, not_student, you_blocked, already_friends, not_accepting, classmates_only, friend_limit, their_friend_limit, daily_limit, null]
+      description: |
+        Vì sao mình chưa gửi lời mời cho người này được (như mã lỗi của `POST /v1/me/friend-requests`); null là gửi được (kể cả khi người kia
+        đã mời mình: gửi là chấp nhận). Bị người kia chặn hiện là `not_accepting`.
+
+    SearchHit:
+      type: object
+      additionalProperties: false
+      required: [person, relation]
+      properties:
+        person: { $ref: "#/components/schemas/Person" }
+        relation: { $ref: "#/components/schemas/Relation" }
+
+    Suggestion:
+      type: object
+      additionalProperties: false
+      required: [person, mutualCount, classmate]
+      properties:
+        person: { $ref: "#/components/schemas/Person" }
+        mutualCount: { type: integer, minimum: 0 }
+        classmate: { $ref: "#/components/schemas/Classmate" }
+
+    Block:
+      type: object
+      additionalProperties: false
+      required: [person, blockedAt]
+      properties:
+        person: { $ref: "#/components/schemas/Person" }
+        blockedAt: { type: string, format: date-time }
+
+    HiddenPart:
+      type: object
+      additionalProperties: false
+      description: |
+        Một phần người xem không được xem. `friends_only`: chủ trang chỉ chia sẻ với bạn bè (web hiện nút Kết bạn); `only_me`: chủ trang để
+        chỉ mình (cũng là điều người bị chặn thấy); `blocked`: người xem đã chặn chủ trang.
+      required: [visible, reason]
+      properties:
+        visible: { type: boolean, const: false }
+        reason: { type: string, enum: [friends_only, only_me, blocked] }
+
+    SharedProgress:
+      type: object
+      additionalProperties: false
+      description: |
+        Tiến độ một học sinh chia sẻ với người khác, do learning tính (learning.yaml `GET /internal/learners/{userId}/shared-progress`, cùng
+        dạng). **Không có** độ chính xác, chủ đề nên ôn, thời gian học (`activity` chỉ có XP từng ngày, không có phút).
+      required: [level, totalXp, weeklyXp, monthlyXp, streakDays, longestStreakDays, course, activity, mastery]
+      properties:
+        level: { type: integer, minimum: 1 }
+        totalXp: { type: integer, minimum: 0 }
+        weeklyXp: { type: integer, minimum: 0 }
+        monthlyXp: { type: integer, minimum: 0 }
+        streakDays: { type: integer, minimum: 0 }
+        longestStreakDays: { type: integer, minimum: 0 }
+        course:
+          type: [object, "null"]
+          additionalProperties: false
+          description: Khóa học sinh học gần nhất (theo bài học); null khi chưa học bài nào. Tên khóa web lấy từ nội dung.
+          required: [courseId, lessonsCompleted, lessonsTotal]
+          properties:
+            courseId: { type: string, maxLength: 100 }
+            lessonsCompleted: { type: integer, minimum: 0 }
+            lessonsTotal: { type: integer, minimum: 0 }
+        activity:
+          type: array
+          maxItems: 84
+          description: 12 tuần gần nhất, cũ trước, ngày theo giờ Việt Nam; ngày không có XP có thể vắng.
+          items:
+            type: object
+            additionalProperties: false
+            required: [date, xp]
+            properties:
+              date: { type: string, format: date }
+              xp: { type: integer, minimum: 0 }
+        mastery:
+          type: array
+          description: Độ thành thạo từng chương của `course` (0–100), theo thứ tự chương. Tên chương web lấy từ nội dung.
+          items:
+            type: object
+            additionalProperties: false
+            required: [chapterId, percent]
+            properties:
+              chapterId: { type: string, maxLength: 100 }
+              percent: { type: integer, minimum: 0, maximum: 100 }
+
+    ProgressPart:
+      oneOf:
+        - $ref: "#/components/schemas/HiddenPart"
+        - type: object
+          additionalProperties: false
+          required: [visible, unavailable, data, weeklyFriendRank]
+          properties:
+            visible: { type: boolean, const: true }
+            unavailable: { type: boolean, description: learning không trả lời; `data` là null. }
+            data:
+              oneOf:
+                - $ref: "#/components/schemas/SharedProgress"
+                - type: "null"
+            weeklyFriendRank:
+              type: [object, "null"]
+              additionalProperties: false
+              description: Hạng tuần của chủ trang trong nhóm bạn của chủ trang (như bảng xếp hạng bạn bè); null khi chủ trang bật ẩn khỏi bảng xếp hạng, hay learning không trả lời.
+              required: [rank, total]
+              properties:
+                rank: { type: integer, minimum: 1 }
+                total: { type: integer, minimum: 1 }
+
+    AchievementsPart:
+      oneOf:
+        - $ref: "#/components/schemas/HiddenPart"
+        - type: object
+          additionalProperties: false
+          required: [visible, count, unlocked]
+          properties:
+            visible: { type: boolean, const: true }
+            count: { type: integer, minimum: 0 }
+            unlocked:
+              type: array
+              description: |
+                Chỉ thành tích đã đạt (người khác không thấy thành tích chưa đạt và tiến độ của nó), mới nhất trước. Tên, mô tả, độ hiếm web
+                lấy từ danh mục `GET /v1/achievements` của learning.
+              items:
+                type: object
+                additionalProperties: false
+                required: [achievementId, unlockedAt]
+                properties:
+                  achievementId: { type: string, pattern: "^[a-z0-9-]{1,60}$" }
+                  unlockedAt: { type: string, format: date-time }
+
+    FriendsPart:
+      oneOf:
+        - $ref: "#/components/schemas/HiddenPart"
+        - type: object
+          additionalProperties: false
+          required: [visible, total, items, mutual]
+          properties:
+            visible: { type: boolean, const: true }
+            total: { type: integer, minimum: 0 }
+            items:
+              type: array
+              maxItems: 300
+              description: Ở `GET /v1/profiles/{handle}`, 24 người đầu theo tên; đủ ở `GET /v1/profiles/{handle}/friends`.
+              items: { $ref: "#/components/schemas/Person" }
+            mutual:
+              type: [object, "null"]
+              additionalProperties: false
+              description: Bạn chung với người xem (null khi người xem là chủ trang hay không phải học sinh). Chỉ có khi được xem danh sách bạn.
+              required: [count, items]
+              properties:
+                count: { type: integer, minimum: 0 }
+                items:
+                  type: array
+                  maxItems: 6
+                  items: { $ref: "#/components/schemas/Person" }
+
+    ProfileView:
+      type: object
+      additionalProperties: false
+      required: [person, relation, blockedByMe, adminView, requestBlock, canCheer, cheeredToday, parts]
+      properties:
+        person: { $ref: "#/components/schemas/Person" }
+        relation: { $ref: "#/components/schemas/Relation" }
+        incomingRequestId: { type: string, format: uuid, description: Chỉ khi `relation` là `incoming` (để Chấp nhận / Từ chối ngay trên trang). }
+        outgoingRequestId: { type: string, format: uuid, description: Chỉ khi `relation` là `outgoing` (để Hủy lời mời). }
+        blockedByMe: { type: boolean }
+        adminView: { type: boolean, description: Người xem là admin nên thấy đủ các phần chia sẻ. }
+        requestBlock: { $ref: "#/components/schemas/RequestBlock" }
+        canCheer: { type: boolean, description: "Người xem là bạn, là học sinh, chưa cổ vũ hôm nay." }
+        cheeredToday: { type: boolean }
+        parts:
+          type: [object, "null"]
+          additionalProperties: false
+          description: Null khi chủ trang không phải học sinh.
+          required: [progress, achievements, friends]
+          properties:
+            progress: { $ref: "#/components/schemas/ProgressPart" }
+            achievements: { $ref: "#/components/schemas/AchievementsPart" }
+            friends: { $ref: "#/components/schemas/FriendsPart" }
+
+    BoardEntry:
+      type: object
+      additionalProperties: false
+      required: [person, rank, xp, rankChange, isMe]
+      properties:
+        person: { $ref: "#/components/schemas/Person" }
+        rank: { type: integer, minimum: 1 }
+        xp: { type: integer, minimum: 0, description: XP trong kỳ. }
+        rankChange: { type: [integer, "null"], description: Dương là lên hạng. }
+        isMe: { type: boolean }
+
+    FriendBoard:
+      type: object
+      additionalProperties: false
+      required: [period, from, entries, me, above, meHidden, unavailable]
+      properties:
+        period: { type: string, enum: [week, month, all] }
+        from: { type: [string, "null"], format: date-time, description: Đầu kỳ (null với `all`). }
+        entries:
+          type: array
+          maxItems: 301
+          items: { $ref: "#/components/schemas/BoardEntry" }
+        me: { oneOf: [{ $ref: "#/components/schemas/BoardEntry" }, { type: "null" }] }
+        above: { oneOf: [{ $ref: "#/components/schemas/BoardEntry" }, { type: "null" }], description: Người ngay trên mình (để "còn N XP để vượt …"). }
+        meHidden: { type: boolean }
+        unavailable: { type: boolean }
+
+    FriendNewsItem:
+      type: object
+      additionalProperties: false
+      description: |
+        Một tin vui. Theo `kind`: `achievement` có `achievementId`; `streak` có `days` (7, 30, 100); `chapter` có `courseId`, `chapterId`;
+        `level` có `level`. Web dựng chữ theo chế độ.
+      required: [id, person, kind, occurredAt]
+      properties:
+        id: { type: string, format: uuid }
+        person: { $ref: "#/components/schemas/Person" }
+        kind: { type: string, enum: [achievement, streak, chapter, level] }
+        occurredAt: { type: string, format: date-time }
+        achievementId: { type: string, pattern: "^[a-z0-9-]{1,60}$" }
+        days: { type: integer, enum: [7, 30, 100] }
+        courseId: { type: string, maxLength: 100 }
+        chapterId: { type: string, maxLength: 100 }
+        level: { type: integer, minimum: 2 }
+
+    NotificationKind:
+      type: string
+      enum:
+        - friend_request
+        - friend_accepted
+        - cheer
+        - assignment_created
+        - class_member_joined
+        - assignment_submitted
+        - achievement_unlocked
+        - level_up
+        - top_up_paid
+        - wallet_adjusted
+        - announcement
+      description: |
+        Thêm loại là bản thêm của hợp đồng (Cộng đồng ở M12: trả lời, bình luận, được chọn, được duyệt, bị ẩn…; tin nhắn ở M13). Web bỏ qua
+        loại lạ. Mỗi loại dùng các `params` sau:
+        - `friend_request` (người nhận lời mời; `actor` người gửi): `requestId`. Bị xóa khi lời mời được trả lời, hủy, hết hạn, có chặn.
+        - `friend_accepted` (người đã gửi lời mời; `actor` người chấp nhận): không có tham số.
+        - `cheer` (người được cổ vũ; gộp theo ngày khi chưa đọc): `cheeredOn`.
+        - `assignment_created` (mọi học sinh của lớp lúc giao; `actor` giáo viên): `classId`, `className`, `assignmentId`, `workId`, `workKind`,
+          `workTitle`, `dueAt`. Bị xóa khi bài giao bị xóa.
+        - `class_member_joined` (giáo viên; gộp theo lớp khi chưa đọc; `actor` học sinh vào gần nhất): `classId`, `className`.
+        - `assignment_submitted` (giáo viên; lần nộp đầu của mỗi học sinh; gộp theo bài giao khi chưa đọc): `classId`, `className`,
+          `assignmentId`, `workId`, `workTitle`.
+        - `achievement_unlocked` (học sinh): `achievementId`. Không có khi thành tích được tính lại cho dữ liệu cũ.
+        - `level_up` (học sinh): `level`.
+        - `top_up_paid` (học sinh): `orderCode`, `coins`.
+        - `wallet_adjusted` (học sinh; admin cộng hay trừ ví): `amount` (dương hay âm). Không bao giờ có lý do của admin.
+        - `announcement` (nhóm nhận; `actor` null, web ghi "Quản trị viên"): `announcementId`, `title`, `body`.
+
+    NotificationParams:
+      type: object
+      additionalProperties: false
+      description: Tham số theo `kind` (xem `NotificationKind`). Chữ ở đây là tên do người dùng đặt (lớp, bài) hay chữ admin viết, chụp lúc tạo.
+      properties:
+        requestId: { type: string, format: uuid }
+        cheeredOn: { type: string, format: date }
+        classId: { type: string, format: uuid }
+        className: { type: string, minLength: 1, maxLength: 100 }
+        assignmentId: { type: string, format: uuid }
+        workId: { type: string, format: uuid }
+        workKind: { type: string, enum: [exercise, exam] }
+        workTitle: { type: string, minLength: 1, maxLength: 200 }
+        dueAt: { type: string, format: date-time }
+        achievementId: { type: string, pattern: "^[a-z0-9-]{1,60}$" }
+        level: { type: integer, minimum: 2 }
+        orderCode: { type: string, pattern: "^PK[0-9]{6}-[0-9]{6}$" }
+        coins: { type: integer, minimum: 1 }
+        amount: { type: integer, format: int64, not: { const: 0 } }
+        announcementId: { type: string, format: uuid }
+        title: { type: string, minLength: 1, maxLength: 120 }
+        body: { type: string, maxLength: 500 }
+
+    Notification:
+      type: object
+      additionalProperties: false
+      required: [id, kind, createdAt, updatedAt, read, count, actor, actors, params]
+      properties:
+        id: { type: string, format: uuid }
+        kind: { $ref: "#/components/schemas/NotificationKind" }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time, description: Lần cuối dòng gộp nhận thêm một sự kiện (bằng `createdAt` với dòng không gộp). }
+        read: { type: boolean }
+        count: { type: integer, minimum: 1, description: Số sự kiện gộp vào dòng này (1 với dòng không gộp). }
+        actor: { oneOf: [{ $ref: "#/components/schemas/Person" }, { type: "null" }] }
+        actors:
+          type: array
+          maxItems: 3
+          description: Với dòng gộp, tối đa 3 người gần nhất (mới nhất trước, gồm cả `actor`); rỗng với dòng không gộp.
+          items: { $ref: "#/components/schemas/Person" }
+        params: { $ref: "#/components/schemas/NotificationParams" }
+
+    NotificationPage:
+      type: object
+      additionalProperties: false
+      required: [items, unread, nextCursor]
+      properties:
+        items:
+          type: array
+          maxItems: 50
+          items: { $ref: "#/components/schemas/Notification" }
+        unread: { type: integer, minimum: 0 }
+        nextCursor: { type: [string, "null"] }
+
+    AnnouncementRequest:
+      type: object
+      additionalProperties: false
+      required: [audience, title]
+      properties:
+        audience: { type: string, enum: [students, teachers, everyone] }
+        title: { type: string, minLength: 1, maxLength: 120 }
+        body: { type: string, maxLength: 500, default: "" }
+
+    Announcement:
+      type: object
+      additionalProperties: false
+      required: [id, audience, title, body, authorId, createdAt, recipients, retractedAt]
+      properties:
+        id: { type: string, format: uuid }
+        audience: { type: string, enum: [students, teachers, everyone] }
+        title: { type: string, minLength: 1, maxLength: 120 }
+        body: { type: string, maxLength: 500 }
+        authorId: { type: string, format: uuid, description: Mã tài khoản của admin gửi (chỉ ở đường admin). }
+        createdAt: { type: string, format: date-time }
+        recipients: { type: integer, minimum: 0, description: Số dòng thông báo đã ghi. }
+        retractedAt: { type: [string, "null"], format: date-time }
+
+    AnnouncementPage:
+      type: object
+      additionalProperties: false
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Announcement" }
+        nextCursor: { type: [string, "null"] }
+
+    AdminUserSocial:
+      type: object
+      additionalProperties: false
+      required: [userId, person, privacy, counts]
+      properties:
+        userId: { type: string, format: uuid }
+        person: { $ref: "#/components/schemas/Person" }
+        privacy: { $ref: "#/components/schemas/ProfilePrivacy" }
+        counts:
+          type: object
+          additionalProperties: false
+          required: [friends, incomingRequests, outgoingRequests, blocking, blockedBy, requestsSentToday]
+          properties:
+            friends: { type: integer, minimum: 0 }
+            incomingRequests: { type: integer, minimum: 0 }
+            outgoingRequests: { type: integer, minimum: 0 }
+            blocking: { type: integer, minimum: 0, description: Số người tài khoản này đã chặn. }
+            blockedBy: { type: integer, minimum: 0, description: Số người đã chặn tài khoản này (dấu hiệu để admin để ý; không có danh sách). }
+            requestsSentToday: { type: integer, minimum: 0 }
+
+    AuditEntry:
+      type: object
+      additionalProperties: false
+      required: [id, actorId, action, createdAt, details]
+      properties:
+        id: { type: string, format: uuid }
+        actorId: { type: string, format: uuid }
+        action: { type: string, enum: [announcement_created, announcement_retracted] }
+        targetId: { type: [string, "null"], format: uuid, description: Mã thông báo chung. }
+        createdAt: { type: string, format: date-time }
+        details:
+          type: object
+          additionalProperties: false
+          properties:
+            audience: { type: string, enum: [students, teachers, everyone] }
+            title: { type: string, maxLength: 120 }
+            recipients: { type: integer, minimum: 0 }
+
+    AuditPage:
+      type: object
+      additionalProperties: false
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/AuditEntry" }
+        nextCursor: { type: [string, "null"] }

@@ -1,7 +1,7 @@
 asyncapi: 3.0.0
 info:
   title: PkKemis — sự kiện giữa các service
-  version: 0.2.0
+  version: 0.3.0
   description: |
     Hợp đồng sự kiện trên Kafka của PkKemis (docs/backend/M8-EVENTS.md). Cùng quy tắc với OpenAPI: **chỉ thêm, không xóa hay đổi nghĩa**.
 
@@ -14,6 +14,14 @@ info:
     `itemId` (tùy chọn); topic mới `commerce.events` với `wallet.changed` (`9a`), `frame.equipped` (`9b`, learning nghe từ `9h` để vẽ khung
     trên bảng xếp hạng), `order.paid` (`9c`); DLQ `commerce.events.dlq`; lý do DLQ `rejected`. **Từ lát `9.0` Kafka bật SASL/SCRAM và ACL**
     (trước khi có tiền đi qua sự kiện): mỗi service một tài khoản, chỉ ghi được topic của mình và DLQ của topic nó đọc (`x-acl` ở từng kênh).
+
+    0.3.0 (M10, social phần 1; docs/backend/M10-SOCIAL.md, chỉ thêm): service mới **social** nghe `identity.events` (danh bạ, lát `10a`),
+    `commerce.events` (khung, nạp, điều chỉnh ví; `10a`, `10g`), `learning.events` (lên cấp, thành tích, chuỗi ngày, hoàn thành chương; `10d`,
+    `10e`) và topic mới `classroom.events` (`10c`: vào, rời lớp; giao, xóa, nộp bài; xóa lớp; **khóa là mã lớp**). learning phát thêm
+    `level.changed`, `achievement.unlocked`, `streak.milestone`, `chapter.completed`. Topic mới `social.events` (`10b`: `friend.added`,
+    `friend.removed`, `user.blocked`, `user.unblocked`; chưa ai nghe tới M11). `user.*` thêm `data.user.createdAt` (identity 0.8.0). Hai tài
+    khoản Kafka mới: `social`, `classroom`. Quyền riêng tư của trang cá nhân ở social, nên `user.privacy_updated` vẫn chỉ có cờ ẩn khỏi bảng
+    xếp hạng.
 
     **Phong bì:** mọi tin là một CloudEvent 1.0 dạng structured (cả phong bì là giá trị của bản ghi Kafka, JSON UTF-8), header
     `content-type: application/cloudevents+json; charset=UTF-8`. Khóa bản ghi là `subject` (mã người dùng), nên sự kiện của cùng một người
@@ -38,6 +46,10 @@ info:
       description: Sổ cái XP
     - name: commerce
       description: Ví Xu, khung, đơn nạp
+    - name: classroom
+      description: Thành viên lớp, bài giao, bài nộp
+    - name: social
+      description: Bạn bè, chặn
 
 defaultContentType: application/cloudevents+json
 
@@ -50,7 +62,7 @@ servers:
       Kafka trên máy này (Docker Compose): Apache Kafka 4.3, chế độ KRaft, một broker (pk-kemis-platform `compose.yml`). Chỉ trong mạng Compose,
       không mở cổng ra ngoài máy. Tắt tự tạo topic (`auto.create.topics.enable=false`): topic do platform tạo lúc khởi động với cấu hình ở từng
       kênh dưới đây. M8: PLAINTEXT. **Từ lát 9.0 (M9):** listener của mạng Compose là `SASL_PLAINTEXT` với SCRAM-SHA-512, mỗi service một
-      tài khoản (`identity`, `learning`, `commerce`; `kafka-ui` chỉ đọc), `StandardAuthorizer`, không ACL thì không được gì
+      tài khoản (`identity`, `learning`, `commerce`; từ 0.3.0 thêm `social`, `classroom`; `kafka-ui` chỉ đọc), `StandardAuthorizer`, không ACL thì không được gì
       (`allow.everyone.if.no.acl.found=false`). Quyền từng tài khoản ghi ở `x-acl` của mỗi kênh; công cụ quản trị chỉ chạy trong container Kafka.
     security:
       - $ref: "#/components/securitySchemes/kafkaScram"
@@ -62,7 +74,7 @@ channels:
     description: |
       Chỉ identity ghi. Khóa = mã người dùng. Mọi sự kiện `user.*` mang ảnh chụp hồ sơ công khai (`data.user`) sau thay đổi, nên bên giữ bản
       sao chỉ cần một cách xử lý cho cả sáu loại: ghi `data.user` khi `version` mới lớn hơn hoặc bằng bản đang có.
-    x-acl: { write: [identity], read: [learning] }
+    x-acl: { write: [identity], read: [learning, social] }
     messages:
       userRegistered: { $ref: "#/components/messages/UserRegistered" }
       userProfileUpdated: { $ref: "#/components/messages/UserProfileUpdated" }
@@ -87,7 +99,7 @@ channels:
       Bên nghe `identity.events` ghi vào đây khi một bản ghi không đọc được hoặc xử lý hỏng sau mọi lần thử lại (M8-EVENTS.md mục 5.4).
       Dùng chung cho mọi nhóm đọc; header `pk-dlq-group` cho biết của ai. Người xem và gửi lại bằng tay (Kafka UI,
       `pk-kemis-platform/scripts/kafka-dlq.sh`); không service nào tự đọc topic này. Giữ 30 ngày.
-    x-acl: { write: [learning], read: [] }
+    x-acl: { write: [learning, social], read: [] }
     messages:
       deadLetter: { $ref: "#/components/messages/DeadLetter" }
     bindings:
@@ -105,10 +117,15 @@ channels:
     title: Sự kiện của learning
     description: |
       Chỉ learning ghi. Khóa = mã người dùng. 0.1.0 chỉ có `xp.awarded`; từ 0.2.0 commerce nghe (nhóm `commerce`) để đổi XP ra Xu. Từ lát 9.0
-      ACL bảo đảm chỉ learning ghi được topic này: ai ghi được ở đây là in được Xu.
-    x-acl: { write: [learning], read: [commerce] }
+      ACL bảo đảm chỉ learning ghi được topic này: ai ghi được ở đây là in được Xu. Từ 0.3.0 có thêm bốn loại tiến độ, social nghe (nhóm
+      `social`, chỉ đọc: tài khoản `social` không ghi được ở đây); commerce bỏ qua các loại đó (loại lạ).
+    x-acl: { write: [learning], read: [commerce, social] }
     messages:
       xpAwarded: { $ref: "#/components/messages/XpAwarded" }
+      levelChanged: { $ref: "#/components/messages/LevelChanged" }
+      achievementUnlocked: { $ref: "#/components/messages/AchievementUnlocked" }
+      streakMilestone: { $ref: "#/components/messages/StreakMilestone" }
+      chapterCompleted: { $ref: "#/components/messages/ChapterCompleted" }
     bindings:
       kafka:
         topic: learning.events
@@ -123,7 +140,7 @@ channels:
     address: learning.events.dlq
     title: Sự kiện của learning mà một bên nghe bỏ cuộc
     description: Như `identity.events.dlq`. Tạo sẵn ở M8 cho đồng bộ; có người ghi từ M9 (commerce).
-    x-acl: { write: [commerce], read: [] }
+    x-acl: { write: [commerce, social], read: [] }
     messages:
       deadLetter: { $ref: "#/components/messages/DeadLetter" }
     bindings:
@@ -142,7 +159,7 @@ channels:
     description: |
       Chỉ commerce ghi (từ 0.2.0). Khóa = mã người dùng (chủ ví). Mỗi sự kiện ghi outbox trong cùng giao dịch với thay đổi (bảng `outbox` cùng
       cột như M8). Platform tạo topic ở lát 9a.
-    x-acl: { write: [commerce], read: [learning] }
+    x-acl: { write: [commerce], read: [learning, social] }
     messages:
       walletChanged: { $ref: "#/components/messages/WalletChanged" }
       frameEquipped: { $ref: "#/components/messages/FrameEquipped" }
@@ -161,12 +178,96 @@ channels:
     address: commerce.events.dlq
     title: Sự kiện của commerce mà một bên nghe bỏ cuộc
     description: Như `identity.events.dlq`. Có người ghi từ lát 9h (learning nghe `frame.equipped`).
-    x-acl: { write: [learning], read: [] }
+    x-acl: { write: [learning, social], read: [] }
     messages:
       deadLetter: { $ref: "#/components/messages/DeadLetter" }
     bindings:
       kafka:
         topic: commerce.events.dlq
+        partitions: 1
+        replicas: 1
+        topicConfiguration:
+          cleanup.policy: [delete]
+          retention.ms: 2592000000
+        bindingVersion: "0.5.0"
+
+  classroomEvents:
+    address: classroom.events
+    title: Sự kiện của classroom
+    description: |
+      Từ 0.3.0 (M10, lát 10c). Chỉ classroom ghi, bằng gói `@pkkemis/outbox` 0.2.0 (bảng `outbox` cùng cột như M8). **Khóa bản ghi và `subject`
+      là mã lớp**, không phải mã người dùng (khác các topic khác): mọi sự kiện của một lớp (vào lớp, giao bài, nộp bài, xóa lớp) nằm cùng
+      partition nên social nhận đúng thứ tự giao dịch của lớp. Mọi thao tác phát sự kiện của một lớp khóa dòng lớp (`SELECT … FOR UPDATE`)
+      trước, nên thứ tự `outbox.id` của một lớp trùng thứ tự ghi (M8-EVENTS.md mục 5.2).
+    x-acl: { write: [classroom], read: [social] }
+    x-subject: class
+    messages:
+      classMemberJoined: { $ref: "#/components/messages/ClassMemberJoined" }
+      classMemberLeft: { $ref: "#/components/messages/ClassMemberLeft" }
+      assignmentCreated: { $ref: "#/components/messages/AssignmentCreated" }
+      assignmentDeleted: { $ref: "#/components/messages/AssignmentDeleted" }
+      assignmentSubmitted: { $ref: "#/components/messages/AssignmentSubmitted" }
+      classDeleted: { $ref: "#/components/messages/ClassDeleted" }
+    bindings:
+      kafka:
+        topic: classroom.events
+        partitions: 3
+        replicas: 1
+        topicConfiguration:
+          cleanup.policy: [delete]
+          retention.ms: 604800000
+        bindingVersion: "0.5.0"
+
+  classroomEventsDlq:
+    address: classroom.events.dlq
+    title: Sự kiện của classroom mà một bên nghe bỏ cuộc
+    description: Như `identity.events.dlq`. Có người ghi từ lát 10c (social).
+    x-acl: { write: [social], read: [] }
+    messages:
+      deadLetter: { $ref: "#/components/messages/DeadLetter" }
+    bindings:
+      kafka:
+        topic: classroom.events.dlq
+        partitions: 1
+        replicas: 1
+        topicConfiguration:
+          cleanup.policy: [delete]
+          retention.ms: 2592000000
+        bindingVersion: "0.5.0"
+
+  socialEvents:
+    address: social.events
+    title: Sự kiện của social
+    description: |
+      Từ 0.3.0 (M10, lát 10b). Chỉ social ghi. Ở M10 chưa ai nghe (arena nghe từ M11 để biết bạn bè và chặn khi thách đấu, ghép trận), như
+      `xp.awarded` ở M8. Khóa: với `friend.*` là mã nhỏ hơn của cặp (`data.userIds[0]`), nên mọi sự kiện của một cặp đến đúng thứ tự; với
+      `user.blocked`, `user.unblocked` là người chặn.
+    x-acl: { write: [social], read: [] }
+    messages:
+      friendAdded: { $ref: "#/components/messages/FriendAdded" }
+      friendRemoved: { $ref: "#/components/messages/FriendRemoved" }
+      userBlocked: { $ref: "#/components/messages/UserBlocked" }
+      userUnblocked: { $ref: "#/components/messages/UserUnblocked" }
+    bindings:
+      kafka:
+        topic: social.events
+        partitions: 3
+        replicas: 1
+        topicConfiguration:
+          cleanup.policy: [delete]
+          retention.ms: 604800000
+        bindingVersion: "0.5.0"
+
+  socialEventsDlq:
+    address: social.events.dlq
+    title: Sự kiện của social mà một bên nghe bỏ cuộc
+    description: Như `identity.events.dlq`. Tạo sẵn ở M10 cho đồng bộ; có người ghi từ M11 (arena).
+    x-acl: { write: [], read: [] }
+    messages:
+      deadLetter: { $ref: "#/components/messages/DeadLetter" }
+    bindings:
+      kafka:
+        topic: social.events.dlq
         partitions: 1
         replicas: 1
         topicConfiguration:
@@ -331,6 +432,209 @@ operations:
     x-service: learning
     x-slice: 9h
 
+  learningPublishesProgressEvents:
+    action: send
+    channel: { $ref: "#/channels/learningEvents" }
+    title: learning phát lên cấp, thành tích, mốc chuỗi ngày, hoàn thành chương
+    description: |
+      Từ 0.3.0 (M10). Ghi outbox trong cùng giao dịch với việc gây ra nó: `level.changed` cùng dòng `xp_events` làm vượt ngưỡng cấp;
+      `streak.milestone` cùng dòng XP đầu tiên của ngày làm chuỗi đạt 7, 30, 100; `chapter.completed` khi bài cuối của chương được hoàn thành;
+      `achievement.unlocked` cùng việc làm đạt thành tích (hay lúc tính lại cho dữ liệu cũ, `backfill: true`). Mỗi sự kiện đúng một lần cho
+      mỗi nguyên nhân (bảng chống lặp ở learning: `chapter_completions`, `streak_milestones`, `user_achievements`).
+    messages:
+      - $ref: "#/channels/learningEvents/messages/levelChanged"
+      - $ref: "#/channels/learningEvents/messages/achievementUnlocked"
+      - $ref: "#/channels/learningEvents/messages/streakMilestone"
+      - $ref: "#/channels/learningEvents/messages/chapterCompleted"
+    bindings:
+      kafka:
+        clientId: { type: string, const: learning }
+        bindingVersion: "0.5.0"
+    x-service: learning
+    x-slice: 10d
+
+  socialReceivesUserEvents:
+    action: receive
+    channel: { $ref: "#/channels/identityEvents" }
+    title: social giữ danh bạ (tên, ảnh, vai trò, khóa, cờ ẩn, ngày tham gia)
+    description: |
+      Nhóm đọc `social` (bộ xử lý `social.members`), từ đầu topic khi nhóm chưa có vị trí. Mỗi sự kiện một giao dịch: `processed_events` và
+      upsert `members` khi `data.user.version` ≥ bản đang có. Lần đầu thấy một tài khoản: cấp mã hồ sơ (`handle`) và ghi quyền riêng tư mặc
+      định. Bản sao trống (lần đầu chạy, mất volume) thì dựng lại bằng `GET /internal/users` của identity; thiếu một người lúc cần thì hỏi
+      `POST /internal/users/batch`.
+    messages:
+      - $ref: "#/channels/identityEvents/messages/userRegistered"
+      - $ref: "#/channels/identityEvents/messages/userProfileUpdated"
+      - $ref: "#/channels/identityEvents/messages/userRoleChanged"
+      - $ref: "#/channels/identityEvents/messages/userLocked"
+      - $ref: "#/channels/identityEvents/messages/userUnlocked"
+      - $ref: "#/channels/identityEvents/messages/userPrivacyUpdated"
+    bindings:
+      kafka:
+        groupId: { type: string, const: social }
+        clientId: { type: string, const: social }
+        bindingVersion: "0.5.0"
+    x-service: social
+    x-slice: 10a
+
+  socialDeadLettersUserEvents:
+    action: send
+    channel: { $ref: "#/channels/identityEventsDlq" }
+    title: social bỏ cuộc một sự kiện của identity
+    messages:
+      - $ref: "#/channels/identityEventsDlq/messages/deadLetter"
+    bindings:
+      kafka:
+        clientId: { type: string, const: social }
+        bindingVersion: "0.5.0"
+    x-service: social
+    x-slice: 10a
+
+  socialReceivesLearningEvents:
+    action: receive
+    channel: { $ref: "#/channels/learningEvents" }
+    title: social giữ cấp độ, huy hiệu đã đạt, tin vui; thông báo lên cấp và thành tích
+    description: |
+      Nhóm đọc `social` (bộ xử lý `social.learning`). Bỏ qua `xp.awarded` và loại lạ. `level.changed`: ghi cấp khi `totalXp` ≥ bản đang có,
+      thông báo `level_up`, tin vui `level`. `achievement.unlocked`: chèn huy hiệu nếu chưa có, thông báo `achievement_unlocked` (trừ
+      `backfill`), tin vui `achievement` (trừ `backfill`). `streak.milestone`, `chapter.completed`: tin vui. Bản sao trống thì dựng lại bằng
+      `GET /internal/learners/levels`, `GET /internal/achievements/unlocked` của learning.
+    messages:
+      - $ref: "#/channels/learningEvents/messages/levelChanged"
+      - $ref: "#/channels/learningEvents/messages/achievementUnlocked"
+      - $ref: "#/channels/learningEvents/messages/streakMilestone"
+      - $ref: "#/channels/learningEvents/messages/chapterCompleted"
+    bindings:
+      kafka:
+        groupId: { type: string, const: social }
+        clientId: { type: string, const: social }
+        bindingVersion: "0.5.0"
+    x-service: social
+    x-slice: 10d
+
+  socialDeadLettersLearningEvents:
+    action: send
+    channel: { $ref: "#/channels/learningEventsDlq" }
+    title: social bỏ cuộc một sự kiện của learning
+    messages:
+      - $ref: "#/channels/learningEventsDlq/messages/deadLetter"
+    bindings:
+      kafka:
+        clientId: { type: string, const: social }
+        bindingVersion: "0.5.0"
+    x-service: social
+    x-slice: 10d
+
+  socialReceivesCommerceEvents:
+    action: receive
+    channel: { $ref: "#/channels/commerceEvents" }
+    title: social giữ khung đang đeo; thông báo nạp và điều chỉnh ví
+    description: |
+      Nhóm đọc `social` (bộ xử lý `social.commerce`). `frame.equipped`: ghi khung khi `data.version` ≥ bản đang có (dựng lại bằng
+      `GET /internal/frames/equipped` của commerce khi trống). `order.paid`: thông báo `top_up_paid`. `wallet.changed`: chỉ loại `adjustment`
+      thành thông báo `wallet_adjusted` (số tiền, không lý do); loại khác bỏ qua. social không lưu số dư.
+    messages:
+      - $ref: "#/channels/commerceEvents/messages/frameEquipped"
+      - $ref: "#/channels/commerceEvents/messages/orderPaid"
+      - $ref: "#/channels/commerceEvents/messages/walletChanged"
+    bindings:
+      kafka:
+        groupId: { type: string, const: social }
+        clientId: { type: string, const: social }
+        bindingVersion: "0.5.0"
+    x-service: social
+    x-slice: 10a
+
+  socialDeadLettersCommerceEvents:
+    action: send
+    channel: { $ref: "#/channels/commerceEventsDlq" }
+    title: social bỏ cuộc một sự kiện của commerce
+    messages:
+      - $ref: "#/channels/commerceEventsDlq/messages/deadLetter"
+    bindings:
+      kafka:
+        clientId: { type: string, const: social }
+        bindingVersion: "0.5.0"
+    x-service: social
+    x-slice: 10a
+
+  classroomPublishesEvents:
+    action: send
+    channel: { $ref: "#/channels/classroomEvents" }
+    title: classroom phát thay đổi thành viên, bài giao, bài nộp, xóa lớp
+    description: |
+      Ghi outbox là bước cuối của giao dịch nghiệp vụ, sau khi đã khóa dòng lớp. Không phát khi thao tác không đổi gì (vào lại lớp đang ở,
+      rời lớp đã rời). `assignment.submitted` chỉ cho lần nộp đầu của mỗi học sinh ở mỗi bài giao (dòng `assignment_submissions` mới).
+    messages:
+      - $ref: "#/channels/classroomEvents/messages/classMemberJoined"
+      - $ref: "#/channels/classroomEvents/messages/classMemberLeft"
+      - $ref: "#/channels/classroomEvents/messages/assignmentCreated"
+      - $ref: "#/channels/classroomEvents/messages/assignmentDeleted"
+      - $ref: "#/channels/classroomEvents/messages/assignmentSubmitted"
+      - $ref: "#/channels/classroomEvents/messages/classDeleted"
+    bindings:
+      kafka:
+        clientId: { type: string, const: classroom }
+        bindingVersion: "0.5.0"
+    x-service: classroom
+    x-slice: 10c
+
+  socialReceivesClassroomEvents:
+    action: receive
+    channel: { $ref: "#/channels/classroomEvents" }
+    title: social giữ học sinh – lớp – giáo viên; thông báo bài giao, vào lớp, nộp bài
+    description: |
+      Nhóm đọc `social` (bộ xử lý `social.classroom`). Vào lớp: ghi `class_links` khi `joinedAt` ≥ mốc đang có, thông báo giáo viên (gộp theo
+      lớp). Rời lớp: xóa khi `leftAt` ≥ mốc vào. Giao bài: một thông báo cho mỗi học sinh đang ở lớp (theo `class_links`, nên đúng những người
+      vào trước lúc giao, nhờ cùng partition). Xóa bài giao, xóa lớp: xóa các thông báo của nó (và `class_links` của lớp). Nộp bài: thông báo
+      giáo viên (gộp theo bài giao). Bản sao trống thì dựng lại bằng `GET /internal/class-members` của classroom.
+    messages:
+      - $ref: "#/channels/classroomEvents/messages/classMemberJoined"
+      - $ref: "#/channels/classroomEvents/messages/classMemberLeft"
+      - $ref: "#/channels/classroomEvents/messages/assignmentCreated"
+      - $ref: "#/channels/classroomEvents/messages/assignmentDeleted"
+      - $ref: "#/channels/classroomEvents/messages/assignmentSubmitted"
+      - $ref: "#/channels/classroomEvents/messages/classDeleted"
+    bindings:
+      kafka:
+        groupId: { type: string, const: social }
+        clientId: { type: string, const: social }
+        bindingVersion: "0.5.0"
+    x-service: social
+    x-slice: 10c
+
+  socialDeadLettersClassroomEvents:
+    action: send
+    channel: { $ref: "#/channels/classroomEventsDlq" }
+    title: social bỏ cuộc một sự kiện của classroom
+    messages:
+      - $ref: "#/channels/classroomEventsDlq/messages/deadLetter"
+    bindings:
+      kafka:
+        clientId: { type: string, const: social }
+        bindingVersion: "0.5.0"
+    x-service: social
+    x-slice: 10c
+
+  socialPublishesEvents:
+    action: send
+    channel: { $ref: "#/channels/socialEvents" }
+    title: social phát tình bạn và chặn
+    description: |
+      Ghi outbox là bước cuối của giao dịch (chấp nhận lời mời, hai người cùng mời nhau, hủy kết bạn, chặn, bỏ chặn), sau khi đã khóa cặp
+      (`pg_advisory_xact_lock` theo hai mã đã sắp xếp), nên mọi sự kiện của một cặp theo đúng thứ tự ghi. Không phát khi không đổi gì.
+    messages:
+      - $ref: "#/channels/socialEvents/messages/friendAdded"
+      - $ref: "#/channels/socialEvents/messages/friendRemoved"
+      - $ref: "#/channels/socialEvents/messages/userBlocked"
+      - $ref: "#/channels/socialEvents/messages/userUnblocked"
+    bindings:
+      kafka:
+        clientId: { type: string, const: social }
+        bindingVersion: "0.5.0"
+    x-service: social
+    x-slice: 10b
+
 components:
   securitySchemes:
     kafkaScram:
@@ -353,7 +657,7 @@ components:
           key: { $ref: "#/components/schemas/UserKey" }
           bindingVersion: "0.5.0"
       x-producer: identity
-      x-consumers: [learning]
+      x-consumers: [learning, social]
       x-slice: 8d
       examples:
         - name: hocSinhMoi
@@ -377,6 +681,7 @@ components:
                 locked: false
                 hideFromLeaderboard: false
                 version: 1
+                createdAt: "2026-10-16T08:15:30.120Z"
 
     UserProfileUpdated:
       name: user.profile_updated
@@ -390,7 +695,7 @@ components:
           key: { $ref: "#/components/schemas/UserKey" }
           bindingVersion: "0.5.0"
       x-producer: identity
-      x-consumers: [learning]
+      x-consumers: [learning, social]
       x-slice: 8d
       examples:
         - name: doiTen
@@ -428,7 +733,7 @@ components:
           key: { $ref: "#/components/schemas/UserKey" }
           bindingVersion: "0.5.0"
       x-producer: identity
-      x-consumers: [learning]
+      x-consumers: [learning, social]
       x-slice: 8d
       examples:
         - name: thuVaiTroGiaoVien
@@ -466,7 +771,7 @@ components:
           key: { $ref: "#/components/schemas/UserKey" }
           bindingVersion: "0.5.0"
       x-producer: identity
-      x-consumers: [learning]
+      x-consumers: [learning, social]
       x-slice: 8d
       examples:
         - name: khoa
@@ -503,7 +808,7 @@ components:
           key: { $ref: "#/components/schemas/UserKey" }
           bindingVersion: "0.5.0"
       x-producer: identity
-      x-consumers: [learning]
+      x-consumers: [learning, social]
       x-slice: 8d
       examples:
         - name: moKhoa
@@ -540,7 +845,7 @@ components:
           key: { $ref: "#/components/schemas/UserKey" }
           bindingVersion: "0.5.0"
       x-producer: identity
-      x-consumers: [learning]
+      x-consumers: [learning, social]
       x-slice: 8d
       examples:
         - name: anKhoiBangXepHang
@@ -626,7 +931,8 @@ components:
       title: Số dư đổi
       summary: |
         Một dòng sổ cái vừa ghi (mỗi dòng một sự kiện; một lượt quay trùng khung là hai sự kiện: trừ giá rồi hoàn). Để có dấu vết và để social
-        đẩy số dư mới tới trình duyệt (M13). Không có lý do điều chỉnh của admin.
+        đẩy số dư mới tới trình duyệt (M13). Không có lý do điều chỉnh của admin. Từ 0.3.0 social nghe, chỉ dùng loại `adjustment` (thông báo
+        "admin điều chỉnh ví"), bỏ qua loại khác.
       contentType: application/cloudevents+json
       headers: { $ref: "#/components/schemas/EventHeaders" }
       payload: { $ref: "#/components/schemas/WalletChangedEvent" }
@@ -635,7 +941,7 @@ components:
           key: { $ref: "#/components/schemas/UserKey" }
           bindingVersion: "0.5.0"
       x-producer: commerce
-      x-consumers: []
+      x-consumers: [social]
       x-slice: 9a
       examples:
         - name: doiXpRaXu
@@ -691,7 +997,7 @@ components:
           key: { $ref: "#/components/schemas/UserKey" }
           bindingVersion: "0.5.0"
       x-producer: commerce
-      x-consumers: [learning]
+      x-consumers: [learning, social]
       x-slice: 9b
       examples:
         - name: deoKhung
@@ -745,7 +1051,7 @@ components:
           key: { $ref: "#/components/schemas/UserKey" }
           bindingVersion: "0.5.0"
       x-producer: commerce
-      x-consumers: []
+      x-consumers: [social]
       x-slice: 9c
       examples:
         - name: napGoi500
@@ -768,6 +1074,478 @@ components:
               priceVnd: 50000
               provider: fake
               paidAt: "2026-10-16T16:02:11.450Z"
+
+    LevelChanged:
+      name: level.changed
+      title: Lên cấp
+      summary: Một lần cộng XP làm học sinh vượt ngưỡng cấp (cùng giao dịch với dòng `xp_events`). Cấp chỉ tăng (XP không bao giờ giảm).
+      contentType: application/cloudevents+json
+      headers: { $ref: "#/components/schemas/EventHeaders" }
+      payload: { $ref: "#/components/schemas/LevelChangedEvent" }
+      bindings:
+        kafka:
+          key: { $ref: "#/components/schemas/UserKey" }
+          bindingVersion: "0.5.0"
+      x-producer: learning
+      x-consumers: [social]
+      x-slice: 10d
+      examples:
+        - name: lenCap7
+          summary: Lên cấp 7
+          headers:
+            content-type: application/cloudevents+json; charset=UTF-8
+          payload:
+            specversion: "1.0"
+            id: 019a1c01-1a2b-7c3d-8e4f-5a6b7c8d9e01
+            source: /learning
+            type: level.changed
+            time: "2026-10-16T13:02:00.120Z"
+            subject: 3f1c9a52-7b1e-4d8a-9c41-0e5b2d7f6a10
+            datacontenttype: application/json
+            data:
+              userId: 3f1c9a52-7b1e-4d8a-9c41-0e5b2d7f6a10
+              level: 7
+              previousLevel: 6
+              totalXp: 7010
+              changedAt: "2026-10-16T13:02:00.120Z"
+
+    AchievementUnlocked:
+      name: achievement.unlocked
+      title: Đạt thành tích
+      summary: |
+        Học sinh vừa đạt một thành tích của danh mục (`GET /v1/achievements` của learning), đúng một lần mỗi (học sinh, thành tích).
+        `backfill: true` khi learning tính lại cho dữ liệu có trước lúc bật thành tích: bên nghe ghi nhận, không thông báo, không đưa thành tin vui.
+      contentType: application/cloudevents+json
+      headers: { $ref: "#/components/schemas/EventHeaders" }
+      payload: { $ref: "#/components/schemas/AchievementUnlockedEvent" }
+      bindings:
+        kafka:
+          key: { $ref: "#/components/schemas/UserKey" }
+          bindingVersion: "0.5.0"
+      x-producer: learning
+      x-consumers: [social]
+      x-slice: 10e
+      examples:
+        - name: chuoi7Ngay
+          summary: Đạt "Chuỗi 7 ngày"
+          headers:
+            content-type: application/cloudevents+json; charset=UTF-8
+          payload:
+            specversion: "1.0"
+            id: 019a1c02-2b3c-7d4e-9f50-6b7c8d9e0f12
+            source: /learning
+            type: achievement.unlocked
+            time: "2026-10-16T13:02:00.120Z"
+            subject: 3f1c9a52-7b1e-4d8a-9c41-0e5b2d7f6a10
+            datacontenttype: application/json
+            data:
+              userId: 3f1c9a52-7b1e-4d8a-9c41-0e5b2d7f6a10
+              achievementId: a-streak-7
+              unlockedAt: "2026-10-16T13:02:00.120Z"
+              backfill: false
+
+    StreakMilestone:
+      name: streak.milestone
+      title: Chuỗi ngày học đạt mốc
+      summary: XP đầu tiên của một ngày làm chuỗi ngày học vừa đạt 7, 30 hoặc 100. Một lần cho mỗi mốc của mỗi chuỗi (chuỗi mới sau khi đứt thì lại có).
+      contentType: application/cloudevents+json
+      headers: { $ref: "#/components/schemas/EventHeaders" }
+      payload: { $ref: "#/components/schemas/StreakMilestoneEvent" }
+      bindings:
+        kafka:
+          key: { $ref: "#/components/schemas/UserKey" }
+          bindingVersion: "0.5.0"
+      x-producer: learning
+      x-consumers: [social]
+      x-slice: 10d
+      examples:
+        - name: chuoi30
+          summary: Chuỗi 30 ngày
+          headers:
+            content-type: application/cloudevents+json; charset=UTF-8
+          payload:
+            specversion: "1.0"
+            id: 019a1c03-3c4d-7e5f-8a61-7c8d9e0f1a23
+            source: /learning
+            type: streak.milestone
+            time: "2026-10-16T07:15:42.000Z"
+            subject: 3f1c9a52-7b1e-4d8a-9c41-0e5b2d7f6a10
+            datacontenttype: application/json
+            data:
+              userId: 3f1c9a52-7b1e-4d8a-9c41-0e5b2d7f6a10
+              days: 30
+              streakStartedOn: "2026-09-17"
+              reachedOn: "2026-10-16"
+
+    ChapterCompleted:
+      name: chapter.completed
+      title: Hoàn thành chương
+      summary: Học sinh vừa hoàn thành bài cuối cùng còn thiếu của một chương. Một lần mỗi (học sinh, chương).
+      contentType: application/cloudevents+json
+      headers: { $ref: "#/components/schemas/EventHeaders" }
+      payload: { $ref: "#/components/schemas/ChapterCompletedEvent" }
+      bindings:
+        kafka:
+          key: { $ref: "#/components/schemas/UserKey" }
+          bindingVersion: "0.5.0"
+      x-producer: learning
+      x-consumers: [social]
+      x-slice: 10d
+      examples:
+        - name: xongChuong2
+          summary: Hoàn thành chương 2 của Hóa học 10
+          headers:
+            content-type: application/cloudevents+json; charset=UTF-8
+          payload:
+            specversion: "1.0"
+            id: 019a1c04-4d5e-7f60-9b72-8d9e0f1a2b34
+            source: /learning
+            type: chapter.completed
+            time: "2026-10-16T14:20:00.000Z"
+            subject: 3f1c9a52-7b1e-4d8a-9c41-0e5b2d7f6a10
+            datacontenttype: application/json
+            data:
+              userId: 3f1c9a52-7b1e-4d8a-9c41-0e5b2d7f6a10
+              courseId: hoa-hoc-10
+              chapterId: c2
+              completedAt: "2026-10-16T14:20:00.000Z"
+
+    ClassMemberJoined:
+      name: class.member_joined
+      title: Học sinh vào lớp
+      summary: Một học sinh vào lớp bằng mã (hay vào lại sau khi đã rời). `subject` là mã lớp.
+      contentType: application/cloudevents+json
+      headers: { $ref: "#/components/schemas/EventHeaders" }
+      payload: { $ref: "#/components/schemas/ClassMemberJoinedEvent" }
+      bindings:
+        kafka:
+          key: { $ref: "#/components/schemas/ClassKey" }
+          bindingVersion: "0.5.0"
+      x-producer: classroom
+      x-consumers: [social]
+      x-slice: 10c
+      examples:
+        - name: vaoLop
+          summary: Minh Anh vào lớp 10A1
+          headers:
+            content-type: application/cloudevents+json; charset=UTF-8
+          payload:
+            specversion: "1.0"
+            id: 019a1c05-5e6f-7a71-8c83-9e0f1a2b3c45
+            source: /classroom
+            type: class.member_joined
+            time: "2026-10-16T06:40:11.000Z"
+            subject: 1c2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f
+            datacontenttype: application/json
+            data:
+              classId: 1c2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f
+              className: 10A1
+              teacherId: 8b2e4f10-3c5d-4e6f-a7b8-c9d0e1f2a3b4
+              studentId: 3f1c9a52-7b1e-4d8a-9c41-0e5b2d7f6a10
+              joinedAt: "2026-10-16T06:40:11.000Z"
+
+    ClassMemberLeft:
+      name: class.member_left
+      title: Học sinh rời lớp
+      summary: Học sinh tự rời lớp (`left`) hoặc giáo viên xóa khỏi lớp (`removed`). Lớp bị xóa thì chỉ có `class.deleted`.
+      contentType: application/cloudevents+json
+      headers: { $ref: "#/components/schemas/EventHeaders" }
+      payload: { $ref: "#/components/schemas/ClassMemberLeftEvent" }
+      bindings:
+        kafka:
+          key: { $ref: "#/components/schemas/ClassKey" }
+          bindingVersion: "0.5.0"
+      x-producer: classroom
+      x-consumers: [social]
+      x-slice: 10c
+      examples:
+        - name: roiLop
+          summary: Minh Anh tự rời lớp
+          headers:
+            content-type: application/cloudevents+json; charset=UTF-8
+          payload:
+            specversion: "1.0"
+            id: 019a1c06-6f70-7b82-9d94-0f1a2b3c4d56
+            source: /classroom
+            type: class.member_left
+            time: "2026-10-18T09:00:00.000Z"
+            subject: 1c2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f
+            datacontenttype: application/json
+            data:
+              classId: 1c2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f
+              studentId: 3f1c9a52-7b1e-4d8a-9c41-0e5b2d7f6a10
+              reason: left
+              leftAt: "2026-10-18T09:00:00.000Z"
+
+    AssignmentCreated:
+      name: assignment.created
+      title: Giáo viên giao bài cho lớp
+      summary: Một bài giao mới (`POST /v1/classes/{classId}/assignments`). Tên lớp, tên bài chụp lúc giao (do giáo viên đặt, giống nhau ở mọi chế độ).
+      contentType: application/cloudevents+json
+      headers: { $ref: "#/components/schemas/EventHeaders" }
+      payload: { $ref: "#/components/schemas/AssignmentCreatedEvent" }
+      bindings:
+        kafka:
+          key: { $ref: "#/components/schemas/ClassKey" }
+          bindingVersion: "0.5.0"
+      x-producer: classroom
+      x-consumers: [social]
+      x-slice: 10c
+      examples:
+        - name: giaoBai
+          summary: Giao bộ bài tập "Ôn tập số oxi hóa" cho 10A1
+          headers:
+            content-type: application/cloudevents+json; charset=UTF-8
+          payload:
+            specversion: "1.0"
+            id: 019a1c07-7081-7c93-8ea5-1a2b3c4d5e67
+            source: /classroom
+            type: assignment.created
+            time: "2026-10-16T07:30:00.000Z"
+            subject: 1c2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f
+            datacontenttype: application/json
+            data:
+              classId: 1c2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f
+              className: 10A1
+              teacherId: 8b2e4f10-3c5d-4e6f-a7b8-c9d0e1f2a3b4
+              assignmentId: 7d8e9f0a-1b2c-4d3e-8f4a-5b6c7d8e9f0a
+              workId: 3e4f5a6b-7c8d-4e9f-a0b1-c2d3e4f5a6b7
+              workKind: exercise
+              workTitle: Ôn tập số oxi hóa
+              assignedAt: "2026-10-16T07:30:00.000Z"
+              dueAt: "2026-10-20T16:59:59.000Z"
+
+    AssignmentDeleted:
+      name: assignment.deleted
+      title: Bài giao bị xóa
+      summary: Giáo viên bỏ một bài giao (hay xóa bài đã soạn kéo theo các bài giao của nó). social xóa thông báo của bài giao này.
+      contentType: application/cloudevents+json
+      headers: { $ref: "#/components/schemas/EventHeaders" }
+      payload: { $ref: "#/components/schemas/AssignmentDeletedEvent" }
+      bindings:
+        kafka:
+          key: { $ref: "#/components/schemas/ClassKey" }
+          bindingVersion: "0.5.0"
+      x-producer: classroom
+      x-consumers: [social]
+      x-slice: 10c
+      examples:
+        - name: boBaiGiao
+          summary: Bỏ bài giao
+          headers:
+            content-type: application/cloudevents+json; charset=UTF-8
+          payload:
+            specversion: "1.0"
+            id: 019a1c08-8192-7da4-9fb6-2b3c4d5e6f78
+            source: /classroom
+            type: assignment.deleted
+            time: "2026-10-16T08:00:00.000Z"
+            subject: 1c2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f
+            datacontenttype: application/json
+            data:
+              classId: 1c2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f
+              assignmentId: 7d8e9f0a-1b2c-4d3e-8f4a-5b6c7d8e9f0a
+              deletedAt: "2026-10-16T08:00:00.000Z"
+
+    AssignmentSubmitted:
+      name: assignment.submitted
+      title: Học sinh nộp bài giao lần đầu
+      summary: Dòng `assignment_submissions` mới (lần nộp đầu của học sinh ở bài giao này). Không có điểm hay câu sai.
+      contentType: application/cloudevents+json
+      headers: { $ref: "#/components/schemas/EventHeaders" }
+      payload: { $ref: "#/components/schemas/AssignmentSubmittedEvent" }
+      bindings:
+        kafka:
+          key: { $ref: "#/components/schemas/ClassKey" }
+          bindingVersion: "0.5.0"
+      x-producer: classroom
+      x-consumers: [social]
+      x-slice: 10c
+      examples:
+        - name: nopBai
+          summary: Minh Anh nộp bài, đúng hạn
+          headers:
+            content-type: application/cloudevents+json; charset=UTF-8
+          payload:
+            specversion: "1.0"
+            id: 019a1c09-92a3-7eb5-8ac7-3c4d5e6f7a89
+            source: /classroom
+            type: assignment.submitted
+            time: "2026-10-17T12:10:00.000Z"
+            subject: 1c2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f
+            datacontenttype: application/json
+            data:
+              classId: 1c2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f
+              className: 10A1
+              teacherId: 8b2e4f10-3c5d-4e6f-a7b8-c9d0e1f2a3b4
+              assignmentId: 7d8e9f0a-1b2c-4d3e-8f4a-5b6c7d8e9f0a
+              workId: 3e4f5a6b-7c8d-4e9f-a0b1-c2d3e4f5a6b7
+              workTitle: Ôn tập số oxi hóa
+              studentId: 3f1c9a52-7b1e-4d8a-9c41-0e5b2d7f6a10
+              submittedAt: "2026-10-17T12:10:00.000Z"
+              late: false
+
+    ClassDeleted:
+      name: class.deleted
+      title: Lớp bị xóa
+      summary: Admin xóa hẳn một lớp. social bỏ mọi học sinh khỏi lớp đó trong bản sao và xóa thông báo của lớp.
+      contentType: application/cloudevents+json
+      headers: { $ref: "#/components/schemas/EventHeaders" }
+      payload: { $ref: "#/components/schemas/ClassDeletedEvent" }
+      bindings:
+        kafka:
+          key: { $ref: "#/components/schemas/ClassKey" }
+          bindingVersion: "0.5.0"
+      x-producer: classroom
+      x-consumers: [social]
+      x-slice: 10c
+      examples:
+        - name: xoaLop
+          summary: Admin xóa lớp
+          headers:
+            content-type: application/cloudevents+json; charset=UTF-8
+          payload:
+            specversion: "1.0"
+            id: 019a1c0a-a3b4-7fc6-9bd8-4d5e6f7a8b90
+            source: /classroom
+            type: class.deleted
+            time: "2026-10-19T10:00:00.000Z"
+            subject: 1c2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f
+            datacontenttype: application/json
+            data:
+              classId: 1c2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f
+              deletedAt: "2026-10-19T10:00:00.000Z"
+
+    FriendAdded:
+      name: friend.added
+      title: Hai học sinh thành bạn
+      summary: Một lời mời được chấp nhận, hoặc hai người cùng mời nhau. `userIds` sắp tăng dần; `subject` = `userIds[0]`.
+      contentType: application/cloudevents+json
+      headers: { $ref: "#/components/schemas/EventHeaders" }
+      payload: { $ref: "#/components/schemas/FriendAddedEvent" }
+      bindings:
+        kafka:
+          key: { $ref: "#/components/schemas/UserKey" }
+          bindingVersion: "0.5.0"
+      x-producer: social
+      x-consumers: []
+      x-slice: 10b
+      examples:
+        - name: thanhBan
+          summary: Minh Anh chấp nhận lời mời của Thanh Tâm
+          headers:
+            content-type: application/cloudevents+json; charset=UTF-8
+          payload:
+            specversion: "1.0"
+            id: 019a1c0b-b4c5-70d7-8ce9-5e6f7a8b9c01
+            source: /social
+            type: friend.added
+            time: "2026-10-16T12:05:00.000Z"
+            subject: 3f1c9a52-7b1e-4d8a-9c41-0e5b2d7f6a10
+            datacontenttype: application/json
+            data:
+              friendshipId: 4a5b6c7d-8e9f-4a0b-9c1d-2e3f4a5b6c7d
+              userIds: [3f1c9a52-7b1e-4d8a-9c41-0e5b2d7f6a10, 5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c8d]
+              since: "2026-10-16T12:05:00.000Z"
+
+    FriendRemoved:
+      name: friend.removed
+      title: Hai học sinh không còn là bạn
+      summary: |
+        Một bên hủy kết bạn (`unfriended`) hoặc chặn bên kia (`blocked`). Lý do chỉ để bên nghe (arena) biết, không bao giờ hiện cho người bị
+        chặn. `subject` = `userIds[0]`, cùng khóa với `friend.added` của cặp đó.
+      contentType: application/cloudevents+json
+      headers: { $ref: "#/components/schemas/EventHeaders" }
+      payload: { $ref: "#/components/schemas/FriendRemovedEvent" }
+      bindings:
+        kafka:
+          key: { $ref: "#/components/schemas/UserKey" }
+          bindingVersion: "0.5.0"
+      x-producer: social
+      x-consumers: []
+      x-slice: 10b
+      examples:
+        - name: huyKetBan
+          summary: Hủy kết bạn
+          headers:
+            content-type: application/cloudevents+json; charset=UTF-8
+          payload:
+            specversion: "1.0"
+            id: 019a1c0c-c5d6-71e8-9dfa-6f7a8b9c0d12
+            source: /social
+            type: friend.removed
+            time: "2026-10-20T19:00:00.000Z"
+            subject: 3f1c9a52-7b1e-4d8a-9c41-0e5b2d7f6a10
+            datacontenttype: application/json
+            data:
+              friendshipId: 4a5b6c7d-8e9f-4a0b-9c1d-2e3f4a5b6c7d
+              userIds: [3f1c9a52-7b1e-4d8a-9c41-0e5b2d7f6a10, 5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c8d]
+              reason: unfriended
+              removedAt: "2026-10-20T19:00:00.000Z"
+
+    UserBlocked:
+      name: user.blocked
+      title: Một người chặn người khác
+      summary: "`subject` = người chặn. Không phát khi chặn lại người đã chặn."
+      contentType: application/cloudevents+json
+      headers: { $ref: "#/components/schemas/EventHeaders" }
+      payload: { $ref: "#/components/schemas/UserBlockedEvent" }
+      bindings:
+        kafka:
+          key: { $ref: "#/components/schemas/UserKey" }
+          bindingVersion: "0.5.0"
+      x-producer: social
+      x-consumers: []
+      x-slice: 10b
+      examples:
+        - name: chan
+          summary: Thanh Tâm chặn Minh Anh
+          headers:
+            content-type: application/cloudevents+json; charset=UTF-8
+          payload:
+            specversion: "1.0"
+            id: 019a1c0d-d6e7-72f9-8e0b-7a8b9c0d1e23
+            source: /social
+            type: user.blocked
+            time: "2026-10-21T08:00:00.000Z"
+            subject: 5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c8d
+            datacontenttype: application/json
+            data:
+              blockerId: 5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c8d
+              blockedId: 3f1c9a52-7b1e-4d8a-9c41-0e5b2d7f6a10
+              at: "2026-10-21T08:00:00.000Z"
+
+    UserUnblocked:
+      name: user.unblocked
+      title: Bỏ chặn
+      summary: "`subject` = người đã chặn. Không phát khi không có chặn nào."
+      contentType: application/cloudevents+json
+      headers: { $ref: "#/components/schemas/EventHeaders" }
+      payload: { $ref: "#/components/schemas/UserUnblockedEvent" }
+      bindings:
+        kafka:
+          key: { $ref: "#/components/schemas/UserKey" }
+          bindingVersion: "0.5.0"
+      x-producer: social
+      x-consumers: []
+      x-slice: 10b
+      examples:
+        - name: boChan
+          summary: Thanh Tâm bỏ chặn
+          headers:
+            content-type: application/cloudevents+json; charset=UTF-8
+          payload:
+            specversion: "1.0"
+            id: 019a1c0e-e7f8-7300-9f1c-8b9c0d1e2f34
+            source: /social
+            type: user.unblocked
+            time: "2026-10-22T08:00:00.000Z"
+            subject: 5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c8d
+            datacontenttype: application/json
+            data:
+              blockerId: 5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c8d
+              blockedId: 3f1c9a52-7b1e-4d8a-9c41-0e5b2d7f6a10
+              at: "2026-10-22T08:00:00.000Z"
 
     DeadLetter:
       name: dead_letter
@@ -842,7 +1620,7 @@ components:
         source:
           type: string
           pattern: "^/[a-z]+$"
-          description: Service phát, dạng `/<service>` (`/identity`, `/learning`, `/commerce`).
+          description: Service phát, dạng `/<service>` (`/identity`, `/learning`, `/commerce`; từ 0.3.0 `/classroom`, `/social`).
         type:
           type: string
           pattern: "^[a-z_]+(\\.[a-z_0-9]+)+$"
@@ -854,7 +1632,9 @@ components:
         subject:
           type: string
           format: uuid
-          description: Mã người dùng mà sự kiện nói tới; bằng khóa bản ghi Kafka.
+          description: |
+            Mã người dùng mà sự kiện nói tới; bằng khóa bản ghi Kafka. Riêng `classroom.events` (0.3.0, `x-subject: class` ở kênh): mã lớp, để
+            mọi sự kiện của một lớp đến đúng thứ tự.
         datacontenttype: { type: string, const: application/json }
         traceparent:
           type: string
@@ -891,6 +1671,12 @@ components:
             Phiên bản hồ sơ công khai, tăng đúng 1 mỗi lần một trường của ảnh chụp này đổi (tài khoản có trước M8 bắt đầu từ 0, tài khoản mới
             là 1 lúc đăng ký). Bên giữ bản sao chỉ ghi khi `version` ≥ bản đang có; bằng nhau là cùng nội dung. Cùng số với `version` của
             `/internal/users/batch`, nên hai đường làm mới không ghi đè nhau bằng bản cũ.
+        createdAt:
+          type: string
+          format: date-time
+          description: |
+            0.3.0 (identity 0.8.0, lát 10a): lúc tài khoản được tạo (ngày tham gia; social dùng cho giới hạn lời mời của tài khoản dưới 7 ngày).
+            Không đổi nên không làm tăng `version`. Tùy chọn trong schema vì sự kiện cũ không có; identity từ 0.8.0 luôn gửi.
 
     UserRegisteredData:
       type: object
@@ -945,7 +1731,9 @@ components:
           minItems: 1
           uniqueItems: true
           items: { type: string, enum: [hideFromLeaderboard] }
-          description: Quyền nào đổi. M10 thêm `progress`, `achievements`, `friends`, `requestsFrom`, `messagesFrom`, `repliesFrom`, `challengesFrom`.
+          description: |
+            Quyền nào đổi. Từ M10 (0.3.0) quyền riêng tư của trang cá nhân (tiến độ, thành tích, danh sách bạn, lời mời, tin nhắn, trả lời) ở
+            social (social.yaml `/v1/me/privacy`), nên ở đây vẫn chỉ có `hideFromLeaderboard` (M10-SOCIAL.md mục 2).
 
     XpSource:
       type: string
@@ -1121,3 +1909,292 @@ components:
             type: { const: order.paid }
             source: { const: /commerce }
             data: { $ref: "#/components/schemas/OrderPaidData" }
+
+    # ---------------------------------------------------------------- 0.3.0 (M10)
+
+    ClassKey:
+      type: string
+      format: uuid
+      description: Khóa bản ghi của `classroom.events` = `subject` = mã lớp (UUID của classroom), viết thường.
+
+    AchievementId:
+      type: string
+      pattern: "^[a-z0-9-]{1,60}$"
+      description: Mã thành tích trong danh mục của learning (`GET /v1/achievements`).
+
+    LevelChangedData:
+      type: object
+      additionalProperties: false
+      required: [userId, level, previousLevel, totalXp, changedAt]
+      properties:
+        userId: { type: string, format: uuid, description: Bằng `subject`. }
+        level: { type: integer, minimum: 2 }
+        previousLevel: { type: integer, minimum: 1 }
+        totalXp: { type: integer, minimum: 0, description: "Tổng XP sau lần cộng này; bên giữ bản sao chỉ ghi khi số này ≥ bản đang có." }
+        changedAt: { type: string, format: date-time }
+
+    AchievementUnlockedData:
+      type: object
+      additionalProperties: false
+      required: [userId, achievementId, unlockedAt, backfill]
+      properties:
+        userId: { type: string, format: uuid, description: Bằng `subject`. }
+        achievementId: { $ref: "#/components/schemas/AchievementId" }
+        unlockedAt: { type: string, format: date-time }
+        backfill: { type: boolean, description: "Tính lại cho dữ liệu cũ lúc bật thành tích: không thông báo, không thành tin vui." }
+
+    StreakMilestoneData:
+      type: object
+      additionalProperties: false
+      required: [userId, days, streakStartedOn, reachedOn]
+      properties:
+        userId: { type: string, format: uuid, description: Bằng `subject`. }
+        days: { type: integer, enum: [7, 30, 100] }
+        streakStartedOn: { type: string, format: date, description: "Ngày đầu của chuỗi (giờ Việt Nam); cùng với `days` là khóa chống lặp." }
+        reachedOn: { type: string, format: date }
+
+    ChapterCompletedData:
+      type: object
+      additionalProperties: false
+      required: [userId, courseId, chapterId, completedAt]
+      properties:
+        userId: { type: string, format: uuid, description: Bằng `subject`. }
+        courseId: { type: string, minLength: 1, maxLength: 100 }
+        chapterId: { type: string, minLength: 1, maxLength: 100 }
+        completedAt: { type: string, format: date-time }
+
+    ClassName:
+      type: string
+      minLength: 1
+      maxLength: 100
+      description: Tên lớp do giáo viên đặt (lưu một lần, giống nhau ở mọi chế độ).
+
+    ClassMemberJoinedData:
+      type: object
+      additionalProperties: false
+      required: [classId, className, teacherId, studentId, joinedAt]
+      properties:
+        classId: { type: string, format: uuid, description: Bằng `subject`. }
+        className: { $ref: "#/components/schemas/ClassName" }
+        teacherId: { type: string, format: uuid }
+        studentId: { type: string, format: uuid }
+        joinedAt: { type: string, format: date-time, description: "Mốc vào lớp; cùng nghĩa với `since` của `GET /internal/class-members`." }
+
+    ClassMemberLeftData:
+      type: object
+      additionalProperties: false
+      required: [classId, studentId, reason, leftAt]
+      properties:
+        classId: { type: string, format: uuid, description: Bằng `subject`. }
+        studentId: { type: string, format: uuid }
+        reason: { type: string, enum: [left, removed], description: "`left` tự rời; `removed` giáo viên xóa khỏi lớp." }
+        leftAt: { type: string, format: date-time }
+
+    AssignmentCreatedData:
+      type: object
+      additionalProperties: false
+      required: [classId, className, teacherId, assignmentId, workId, workKind, workTitle, assignedAt, dueAt]
+      properties:
+        classId: { type: string, format: uuid, description: Bằng `subject`. }
+        className: { $ref: "#/components/schemas/ClassName" }
+        teacherId: { type: string, format: uuid }
+        assignmentId: { type: string, format: uuid }
+        workId: { type: string, format: uuid }
+        workKind: { type: string, enum: [exercise, exam] }
+        workTitle: { type: string, minLength: 1, maxLength: 200 }
+        assignedAt: { type: string, format: date-time }
+        dueAt: { type: string, format: date-time }
+
+    AssignmentDeletedData:
+      type: object
+      additionalProperties: false
+      required: [classId, assignmentId, deletedAt]
+      properties:
+        classId: { type: string, format: uuid, description: Bằng `subject`. }
+        assignmentId: { type: string, format: uuid }
+        deletedAt: { type: string, format: date-time }
+
+    AssignmentSubmittedData:
+      type: object
+      additionalProperties: false
+      required: [classId, className, teacherId, assignmentId, workId, workTitle, studentId, submittedAt, late]
+      properties:
+        classId: { type: string, format: uuid, description: Bằng `subject`. }
+        className: { $ref: "#/components/schemas/ClassName" }
+        teacherId: { type: string, format: uuid }
+        assignmentId: { type: string, format: uuid }
+        workId: { type: string, format: uuid }
+        workTitle: { type: string, minLength: 1, maxLength: 200 }
+        studentId: { type: string, format: uuid }
+        submittedAt: { type: string, format: date-time }
+        late: { type: boolean, description: Nộp sau hạn. }
+
+    ClassDeletedData:
+      type: object
+      additionalProperties: false
+      required: [classId, deletedAt]
+      properties:
+        classId: { type: string, format: uuid, description: Bằng `subject`. }
+        deletedAt: { type: string, format: date-time }
+
+    UserPair:
+      type: array
+      minItems: 2
+      maxItems: 2
+      uniqueItems: true
+      items: { type: string, format: uuid }
+      description: Hai mã người dùng của cặp, sắp tăng dần (so chuỗi viết thường); `subject` là phần tử đầu.
+
+    FriendAddedData:
+      type: object
+      additionalProperties: false
+      required: [friendshipId, userIds, since]
+      properties:
+        friendshipId: { type: string, format: uuid }
+        userIds: { $ref: "#/components/schemas/UserPair" }
+        since: { type: string, format: date-time }
+
+    FriendRemovedData:
+      type: object
+      additionalProperties: false
+      required: [friendshipId, userIds, reason, removedAt]
+      properties:
+        friendshipId: { type: string, format: uuid, description: Bằng `friendshipId` của `friend.added` tương ứng. }
+        userIds: { $ref: "#/components/schemas/UserPair" }
+        reason: { type: string, enum: [unfriended, blocked] }
+        removedAt: { type: string, format: date-time }
+
+    UserBlockData:
+      type: object
+      additionalProperties: false
+      required: [blockerId, blockedId, at]
+      properties:
+        blockerId: { type: string, format: uuid, description: Bằng `subject`. }
+        blockedId: { type: string, format: uuid }
+        at: { type: string, format: date-time }
+
+    LevelChangedEvent:
+      allOf:
+        - $ref: "#/components/schemas/CloudEventEnvelope"
+        - type: object
+          properties:
+            type: { const: level.changed }
+            source: { const: /learning }
+            data: { $ref: "#/components/schemas/LevelChangedData" }
+
+    AchievementUnlockedEvent:
+      allOf:
+        - $ref: "#/components/schemas/CloudEventEnvelope"
+        - type: object
+          properties:
+            type: { const: achievement.unlocked }
+            source: { const: /learning }
+            data: { $ref: "#/components/schemas/AchievementUnlockedData" }
+
+    StreakMilestoneEvent:
+      allOf:
+        - $ref: "#/components/schemas/CloudEventEnvelope"
+        - type: object
+          properties:
+            type: { const: streak.milestone }
+            source: { const: /learning }
+            data: { $ref: "#/components/schemas/StreakMilestoneData" }
+
+    ChapterCompletedEvent:
+      allOf:
+        - $ref: "#/components/schemas/CloudEventEnvelope"
+        - type: object
+          properties:
+            type: { const: chapter.completed }
+            source: { const: /learning }
+            data: { $ref: "#/components/schemas/ChapterCompletedData" }
+
+    ClassMemberJoinedEvent:
+      allOf:
+        - $ref: "#/components/schemas/CloudEventEnvelope"
+        - type: object
+          properties:
+            type: { const: class.member_joined }
+            source: { const: /classroom }
+            data: { $ref: "#/components/schemas/ClassMemberJoinedData" }
+
+    ClassMemberLeftEvent:
+      allOf:
+        - $ref: "#/components/schemas/CloudEventEnvelope"
+        - type: object
+          properties:
+            type: { const: class.member_left }
+            source: { const: /classroom }
+            data: { $ref: "#/components/schemas/ClassMemberLeftData" }
+
+    AssignmentCreatedEvent:
+      allOf:
+        - $ref: "#/components/schemas/CloudEventEnvelope"
+        - type: object
+          properties:
+            type: { const: assignment.created }
+            source: { const: /classroom }
+            data: { $ref: "#/components/schemas/AssignmentCreatedData" }
+
+    AssignmentDeletedEvent:
+      allOf:
+        - $ref: "#/components/schemas/CloudEventEnvelope"
+        - type: object
+          properties:
+            type: { const: assignment.deleted }
+            source: { const: /classroom }
+            data: { $ref: "#/components/schemas/AssignmentDeletedData" }
+
+    AssignmentSubmittedEvent:
+      allOf:
+        - $ref: "#/components/schemas/CloudEventEnvelope"
+        - type: object
+          properties:
+            type: { const: assignment.submitted }
+            source: { const: /classroom }
+            data: { $ref: "#/components/schemas/AssignmentSubmittedData" }
+
+    ClassDeletedEvent:
+      allOf:
+        - $ref: "#/components/schemas/CloudEventEnvelope"
+        - type: object
+          properties:
+            type: { const: class.deleted }
+            source: { const: /classroom }
+            data: { $ref: "#/components/schemas/ClassDeletedData" }
+
+    FriendAddedEvent:
+      allOf:
+        - $ref: "#/components/schemas/CloudEventEnvelope"
+        - type: object
+          properties:
+            type: { const: friend.added }
+            source: { const: /social }
+            data: { $ref: "#/components/schemas/FriendAddedData" }
+
+    FriendRemovedEvent:
+      allOf:
+        - $ref: "#/components/schemas/CloudEventEnvelope"
+        - type: object
+          properties:
+            type: { const: friend.removed }
+            source: { const: /social }
+            data: { $ref: "#/components/schemas/FriendRemovedData" }
+
+    UserBlockedEvent:
+      allOf:
+        - $ref: "#/components/schemas/CloudEventEnvelope"
+        - type: object
+          properties:
+            type: { const: user.blocked }
+            source: { const: /social }
+            data: { $ref: "#/components/schemas/UserBlockData" }
+
+    UserUnblockedEvent:
+      allOf:
+        - $ref: "#/components/schemas/CloudEventEnvelope"
+        - type: object
+          properties:
+            type: { const: user.unblocked }
+            source: { const: /social }
+            data: { $ref: "#/components/schemas/UserBlockData" }

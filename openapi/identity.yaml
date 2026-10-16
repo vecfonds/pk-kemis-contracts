@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: PkKemis identity
-  version: 0.7.0
+  version: 0.8.0
   summary: Tài khoản, đăng nhập, token và vai trò.
   description: |
     Đã được chủ dự án duyệt ngày 13/10/2026 (docs/backend/M1-IDENTITY.md).
@@ -17,6 +17,12 @@ info:
     0.7.0 (docs/backend/M8-EVENTS.md, chỉ thêm, lát 8d): `UserSummary.version` (phiên bản hồ sơ công khai). Từ bản này identity phát sự kiện
     `user.*` lên Kafka (`asyncapi/pkkemis.yaml` 0.1.0) mỗi khi đăng ký, đổi tên hoặc ảnh (`PATCH /v1/me`), đổi quyền riêng tư
     (`PATCH /v1/me/privacy`), đổi vai trò, khóa, mở khóa (`/v1/admin/users/**`). Không thao tác REST nào đổi hành vi hay phản hồi.
+
+    0.8.0 (docs/backend/M10-SOCIAL.md, lát 10a, chỉ thêm): `UserSummary.createdAt` (ngày tham gia hiện trên trang cá nhân; social dùng cho giới
+    hạn lời mời của tài khoản dưới 7 ngày) và `GET /internal/users` (mọi tài khoản theo trang, để social dựng danh bạ lần đầu: sự kiện
+    `user.registered` chỉ giữ 7 ngày). Sự kiện `user.*` thêm `data.user.createdAt` (asyncapi/pkkemis.yaml 0.3.0). Quyền riêng tư của trang cá
+    nhân (ai xem tiến độ, thành tích, danh sách bạn; ai gửi lời mời, nhắn tin, trả lời) nằm ở social (`social.yaml` `/v1/me/privacy`); identity
+    chỉ giữ "ẩn khỏi bảng xếp hạng" như từ 0.5.0.
 
     - Chỉ thêm, không xóa hay đổi nghĩa của trường đã phát hành.
     - Từ 0.3.0 các thao tác admin (`/v1/admin/*`) đã được cài (lát D của M4); `x-phase: 2` còn lại, nếu có, là thao tác chưa cài.
@@ -300,7 +306,9 @@ paths:
       operationId: getMyPrivacy
       x-slice: L7
       summary: Cài đặt quyền riêng tư của mình
-      description: Giai đoạn 1 chỉ có "ẩn khỏi bảng xếp hạng"; các quyền khác (ai xem tiến độ, ai nhắn tin…) thêm khi có `social`.
+      description: |
+        Chỉ có "ẩn khỏi bảng xếp hạng". Từ 0.8.0 (M10): các quyền khác của trang cá nhân (ai xem tiến độ, thành tích, danh sách bạn; ai gửi
+        lời mời, nhắn tin, trả lời) ở social (`social.yaml` `GET/PATCH /v1/me/privacy`), không thêm vào đây.
       responses:
         "200":
           description: Cài đặt
@@ -493,6 +501,42 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
 
+  /internal/users:
+    get:
+      tags: [internal]
+      operationId: listUsersInternal
+      x-slice: 10a
+      summary: Mọi tài khoản theo trang (social dựng danh bạ lần đầu)
+      description: |
+        0.8.0 (M10): như `POST /internal/users/batch` nhưng duyệt hết, theo `id` tăng dần, kể cả tài khoản bị khóa (`locked: true`). Để một
+        service giữ bản sao hồ sơ công khai (social) dựng lại từ đầu khi bản sao trống: sự kiện `user.registered` chỉ còn trên Kafka 7 ngày.
+        Bên giữ bản sao ghi khi `version` ≥ bản đang có, như với sự kiện. Không có email, ngày sinh.
+      security:
+        - internalKey: []
+      parameters:
+        - name: after
+          in: query
+          description: Mã cuối của trang trước.
+          schema: { type: string, format: uuid }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 500 }
+      responses:
+        "200":
+          description: Một trang
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [users, nextAfter]
+                properties:
+                  users:
+                    type: array
+                    items: { $ref: "#/components/schemas/UserSummary" }
+                  nextAfter: { type: [string, "null"], format: uuid, description: Null là trang cuối. }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
 components:
   securitySchemes:
     bearerAuth:
@@ -625,6 +669,13 @@ components:
             0.7.0 (M8, lát 8d): phiên bản hồ sơ công khai (tên, ảnh, vai trò, khóa, cờ ẩn), tăng đúng 1 mỗi lần một trong các trường đó đổi;
             tài khoản có trước M8 bắt đầu từ 0, tài khoản mới là 1. Bằng `data.user.version` của sự kiện `user.*`. Vắng (identity cũ hơn
             0.7.0) thì bên gọi coi như không biết phiên bản và ghi như trước.
+        createdAt:
+          type: string
+          format: date-time
+          x-slice: 10a
+          description: |
+            0.8.0 (M10, lát 10a): lúc tài khoản được tạo (ngày tham gia). Không đổi, nên không làm tăng `version`. Vắng (identity cũ hơn 0.8.0)
+            thì bên gọi coi như chưa biết.
 
     PrivacySettings:
       type: object

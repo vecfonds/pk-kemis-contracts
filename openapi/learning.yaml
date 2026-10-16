@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: PkKemis learning
-  version: 1.1.0
+  version: 1.2.0
   summary: Nội dung học, bài tập, đề thi, chấm điểm, sổ cái XP, tiến độ, sổ tay lỗi sai, bảng xếp hạng.
   description: |
     Giai đoạn 1 (docs/backend/M3-LEARNING.md): bộ bài tập và đề thi, lượt làm bài do máy chủ chấm, XP, cấp độ, chuỗi ngày.
@@ -28,6 +28,14 @@ info:
     1.1.0 (docs/backend/M9-COMMERCE.md, lát 9h, chỉ thêm): `LeaderboardEntry.frameId`, khung avatar đang đeo của từng người trên bảng xếp
     hạng. learning giữ bản sao khung từ sự kiện `frame.equipped` của commerce (asyncapi/pkkemis.yaml 0.2.0), dựng lại bằng
     `GET /internal/frames/equipped` của commerce khi bản sao trống.
+
+    1.2.0 (docs/backend/M10-SOCIAL.md, chỉ thêm): tiến độ cho trang cá nhân ở máy chủ thay số mẫu (`GET /v1/me/progress`: lịch hoạt động 12
+    tuần, độ thành thạo chương, số câu đã làm, chủ đề nên ôn; lát `10d`), thành tích (`GET /v1/achievements` danh mục, `GET /v1/me/achievements`;
+    lát `10e`), và bốn đường nội bộ **chỉ cho social** với khóa riêng `LEARNING_INTERNAL_KEY_SOCIAL` (`socialKey`): tiến độ chia sẻ của một
+    học sinh (social gọi sau khi đã quyết người xem được xem), XP trong kỳ của một nhóm người (bảng xếp hạng bạn bè), cấp độ và thành tích đã
+    đạt theo trang (dựng lại bản sao của social). learning phát thêm `level.changed`, `achievement.unlocked`, `streak.milestone`,
+    `chapter.completed` (asyncapi/pkkemis.yaml 0.3.0). Phần riêng tư (độ chính xác, chủ đề nên ôn, thời gian học) chỉ có ở `/v1/me/**`, không
+    bao giờ ở đường nội bộ.
 
     - Từ 1.0.0 lại chỉ thêm, không xóa hay đổi nghĩa của trường đã phát hành.
     - Token là access token của identity (xem identity.yaml); service tự kiểm bằng khóa công khai, không gọi identity.
@@ -61,6 +69,8 @@ tags:
     description: Sổ tay lỗi sai
   - name: leaderboard
     description: Bảng xếp hạng XP
+  - name: achievements
+    description: Thành tích (danh mục, của mình)
   - name: admin
     description: Soạn nội dung (admin)
   - name: internal
@@ -463,6 +473,38 @@ paths:
               schema: { $ref: "#/components/schemas/Stats" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v1/me/progress:
+    get:
+      tags: [progress]
+      operationId: getMyProgress
+      x-slice: 10d
+      summary: Tiến độ của mình cho Trang cá nhân và Tổng quan (học sinh)
+      description: |
+        Thay các số mẫu của `getProgressOverview()` ở web. Tính từ sổ cái XP, kết quả từng câu (`/v1/me/results`) và tiến độ bài học; ngày theo giờ
+        Việt Nam. Chỉ chính học sinh đó đọc được đường này: người khác chỉ nhận phần chia sẻ qua social (`SharedProgress`, không có độ chính xác,
+        chủ đề nên ôn, phút học).
+        - `course`: khóa ở `courseId` nếu gửi, không thì khóa học sinh học bài gần nhất; null khi chưa học bài nào và không gửi `courseId`.
+        - `activity`: 84 ngày gần nhất (12 tuần), cũ trước, đủ 84 dòng (ngày không học là 0). `minutes` = tổng thời gian các lượt làm đã nộp
+          trong ngày, mỗi lượt tối đa 60 phút; đọc bài học không tính (M10 câu 15).
+        - `mastery`: mỗi chương của `course` theo thứ tự, `percent` = làm tròn xuống của 100 × trung bình phần đúng lần gần nhất trên mọi câu
+          đang dùng của chương trong ngân hàng (câu chưa làm tính 0).
+        - `weakTopics`: tối đa 3 chủ đề có ít nhất 3 câu đã làm và trung bình phần đúng dưới 0,6, thấp nhất trước; kèm một bộ bài tập cùng
+          chương có câu của chủ đề đó (nếu có).
+        - `questionsAnswered`, `correctAnswers`: số câu khác nhau đã trả lời, số câu khác nhau đúng hoàn toàn lần gần nhất.
+      parameters:
+        - name: courseId
+          in: query
+          schema: { type: string, maxLength: 100 }
+      responses:
+        "200":
+          description: Tiến độ
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MyProgress" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
 
   # ------------------------------------------------------------------ 0.3.0: nội dung (đọc)
 
@@ -1484,6 +1526,57 @@ paths:
         "400": { $ref: "#/components/responses/ValidationFailed" }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
+  # ------------------------------------------------------------------ 1.2.0: thành tích (M10)
+
+  /v1/achievements:
+    get:
+      tags: [achievements]
+      operationId: listAchievements
+      x-slice: 10e
+      summary: Danh mục thành tích (mọi vai trò)
+      description: |
+        Tệp danh mục trong learning (`seed/achievements.json`), chép từ `src/mocks/achievements.ts` của web và đối chiếu bằng script
+        (`scripts/check-achievement-parity.cjs` ở web), như danh mục cửa hàng ở M9. Tên và mô tả giống nhau ở mọi chế độ (như bản thử); luật
+        mở khóa (`rule`) chỉ nằm trong service, không trả ra. `version` (và `ETag`) đổi khi danh mục đổi; gửi `If-None-Match` đúng thì nhận 304.
+      parameters:
+        - { $ref: "#/components/parameters/IfNoneMatch" }
+      responses:
+        "200":
+          description: Danh mục
+          headers:
+            ETag: { $ref: "#/components/headers/ETag" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AchievementCatalog" }
+        "304": { $ref: "#/components/responses/NotModified" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/me/achievements:
+    get:
+      tags: [achievements]
+      operationId: getMyAchievements
+      x-slice: 10e
+      summary: Thành tích của mình, cả thành tích chưa đạt và tiến độ của nó (học sinh)
+      description: |
+        Một dòng cho mỗi thành tích của danh mục. Thành tích được tính trong cùng giao dịch với việc làm ra nó (chấm câu, nộp bài, hoàn thành
+        bài học, cộng XP của ngày) và phát `achievement.unlocked` qua outbox. Lúc bật lát 10e, learning tính lại cho mọi học sinh đã có dữ liệu
+        (mở khóa im lặng: sự kiện có `backfill: true`, social không thông báo).
+      responses:
+        "200":
+          description: Thành tích
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [version, items]
+                properties:
+                  version: { type: string, description: Phiên bản danh mục đã dùng. }
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/MyAchievement" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
   # ------------------------------------------------------------------ 0.3.0: nội bộ
 
   /internal/catalog:
@@ -1632,6 +1725,175 @@ paths:
         "400": { $ref: "#/components/responses/ValidationFailed" }
         "403": { $ref: "#/components/responses/InternalForbidden" }
 
+  # ------------------------------------------------------------------ 1.2.0: nội bộ cho social (M10)
+
+  /internal/learners/{userId}/shared-progress:
+    get:
+      tags: [internal]
+      operationId: getSharedProgress
+      x-slice: 10d
+      x-callers: [social]
+      summary: Tiến độ một học sinh chia sẻ với người khác (social, cho trang cá nhân)
+      description: |
+        social chỉ gọi **sau khi** đã quyết người xem được xem tiến độ của học sinh này (quyền riêng tư và tình bạn ở social); learning không
+        biết người xem. Cùng cách tính với `GET /v1/me/progress` nhưng **không có** độ chính xác, chủ đề nên ôn, số câu, phút học (`activity` chỉ
+        có XP). Mã không phải học sinh có dữ liệu ở learning: 200 với số 0 (`course` null). Chỉ khóa `socialKey`.
+      security:
+        - socialKey: []
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: courseId
+          in: query
+          schema: { type: string, maxLength: 100 }
+      responses:
+        "200":
+          description: Tiến độ chia sẻ
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SharedProgress" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "403": { $ref: "#/components/responses/InternalForbidden" }
+
+  /internal/leaderboard/members:
+    post:
+      tags: [internal]
+      operationId: getLeaderboardMembers
+      x-slice: 10d
+      x-callers: [social]
+      summary: XP trong kỳ của một nhóm người (social, bảng xếp hạng bạn bè)
+      description: |
+        social gửi nhóm đã lọc theo quyền của nó (mình và các bạn chia sẻ tiến độ với bạn bè, không có chặn); learning bỏ thêm người không phải
+        học sinh, bị khóa, bật ẩn khỏi bảng xếp hạng (theo bản sao `people` của learning), rồi trả XP trong kỳ, XP kỳ trước và cấp độ. Kỳ như
+        `GET /v1/leaderboard` (`week` từ 00:00 thứ Hai, `month` từ ngày 1, giờ Việt Nam). `previousXp`: XP của kỳ trước (`all`: tổng lúc đầu tuần
+        này). social xếp hạng. Chỉ khóa `socialKey`.
+      security:
+        - socialKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [period, userIds]
+              properties:
+                period: { type: string, enum: [week, month, all] }
+                userIds:
+                  type: array
+                  minItems: 1
+                  maxItems: 301
+                  uniqueItems: true
+                  items: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Một dòng cho mỗi người còn lại sau khi lọc
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [period, from, items]
+                properties:
+                  period: { type: string, enum: [week, month, all] }
+                  from: { type: [string, "null"], format: date-time }
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [userId, xp, previousXp, level]
+                      properties:
+                        userId: { type: string, format: uuid }
+                        xp: { type: integer, minimum: 0 }
+                        previousXp: { type: [integer, "null"], minimum: 0 }
+                        level: { type: integer, minimum: 1 }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "403": { $ref: "#/components/responses/InternalForbidden" }
+
+  /internal/learners/levels:
+    get:
+      tags: [internal]
+      operationId: listLearnerLevels
+      x-slice: 10d
+      x-callers: [social]
+      summary: Cấp độ của mọi học sinh có XP, theo trang (social dựng lại bản sao)
+      description: |
+        Để social dựng bản sao cấp độ (hiện cạnh tên) khi bản sao trống hay mất sự kiện `level.changed` (topic giữ 30 ngày). Theo `userId`.
+        `totalXp` là lưới chống ghi lùi: bên giữ bản sao chỉ ghi khi `totalXp` ≥ bản đang có. Chỉ khóa `socialKey`.
+      security:
+        - socialKey: []
+      parameters:
+        - name: after
+          in: query
+          description: Mã người dùng cuối của trang trước.
+          schema: { type: string, format: uuid }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 500 }
+      responses:
+        "200":
+          description: Một trang
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, nextAfter]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [userId, level, totalXp]
+                      properties:
+                        userId: { type: string, format: uuid }
+                        level: { type: integer, minimum: 1 }
+                        totalXp: { type: integer, minimum: 0 }
+                  nextAfter: { type: [string, "null"], format: uuid, description: Null là trang cuối. }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "403": { $ref: "#/components/responses/InternalForbidden" }
+
+  /internal/achievements/unlocked:
+    get:
+      tags: [internal]
+      operationId: listUnlockedAchievements
+      x-slice: 10e
+      x-callers: [social]
+      summary: Mọi thành tích đã đạt, theo trang (social dựng lại bản sao huy hiệu)
+      description: |
+        Theo `(userId, achievementId)`. social chèn nếu chưa có (thành tích đã đạt không bao giờ mất). Chỉ khóa `socialKey`.
+      security:
+        - socialKey: []
+      parameters:
+        - name: after
+          in: query
+          description: "`nextAfter` của trang trước (dạng `<userId>:<achievementId>`)."
+          schema: { type: string, maxLength: 120 }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 500 }
+      responses:
+        "200":
+          description: Một trang
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, nextAfter]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [userId, achievementId, unlockedAt]
+                      properties:
+                        userId: { type: string, format: uuid }
+                        achievementId: { type: string, pattern: "^[a-z0-9-]{1,60}$" }
+                        unlockedAt: { type: string, format: date-time }
+                  nextAfter: { type: [string, "null"] }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "403": { $ref: "#/components/responses/InternalForbidden" }
+
 components:
   securitySchemes:
     bearerAuth:
@@ -1646,6 +1908,14 @@ components:
       description: |
         Khóa dùng chung của learning (`LEARNING_INTERNAL_KEY`), chỉ service gọi nhau (classroom). Từ 1.0.0 (7b) web không giữ khóa này. Thay
         bằng token giữa service khi có gateway.
+    socialKey:
+      type: apiKey
+      in: header
+      name: X-Internal-Key
+      description: |
+        1.2.0 (M10): khóa riêng của social (`LEARNING_INTERNAL_KEY_SOCIAL`), chỉ mở bốn đường `x-callers: [social]` (tiến độ chia sẻ, XP của
+        một nhóm, cấp độ, thành tích đã đạt). Khóa của classroom (`internalKey`) không vào được các đường này, khóa của social không vào được
+        các đường của classroom (như khóa theo bên gọi của commerce). Khóa trống thì không ai vào được. So sánh thời gian hằng.
 
   headers:
     ETag:
@@ -2879,3 +3149,135 @@ components:
                 description: "Bắt buộc với câu tự soạn (`own`): bản chụp đầy đủ để sổ tay hiện và ôn được."
                 allOf:
                   - { $ref: "#/components/schemas/Question" }
+
+    # ---------------------------------------------------------------- 1.2.0 (M10)
+
+    SharedProgress:
+      type: object
+      additionalProperties: false
+      description: |
+        1.2.0 (lát 10d): phần tiến độ một học sinh chia sẻ với người khác, đi qua social (social.yaml có schema cùng tên, cùng dạng). Không có độ
+        chính xác, chủ đề nên ôn, thời gian học.
+      required: [level, totalXp, weeklyXp, monthlyXp, streakDays, longestStreakDays, course, activity, mastery]
+      properties:
+        level: { type: integer, minimum: 1 }
+        totalXp: { type: integer, minimum: 0 }
+        weeklyXp: { type: integer, minimum: 0 }
+        monthlyXp: { type: integer, minimum: 0 }
+        streakDays: { type: integer, minimum: 0 }
+        longestStreakDays: { type: integer, minimum: 0 }
+        course:
+          type: [object, "null"]
+          additionalProperties: false
+          required: [courseId, lessonsCompleted, lessonsTotal]
+          properties:
+            courseId: { type: string, maxLength: 100 }
+            lessonsCompleted: { type: integer, minimum: 0 }
+            lessonsTotal: { type: integer, minimum: 0 }
+        activity:
+          type: array
+          maxItems: 84
+          items:
+            type: object
+            additionalProperties: false
+            required: [date, xp]
+            properties:
+              date: { type: string, format: date }
+              xp: { type: integer, minimum: 0 }
+        mastery:
+          type: array
+          items: { $ref: "#/components/schemas/ChapterMastery" }
+
+    ChapterMastery:
+      type: object
+      additionalProperties: false
+      required: [chapterId, percent]
+      properties:
+        chapterId: { type: string, maxLength: 100 }
+        percent: { type: integer, minimum: 0, maximum: 100 }
+
+    MyProgress:
+      type: object
+      additionalProperties: false
+      description: 1.2.0 (lát 10d). Xem `GET /v1/me/progress`.
+      required: [today, course, activity, mastery, questionsAnswered, correctAnswers, studyMinutesThisMonth, weakTopics]
+      properties:
+        today: { type: string, format: date, description: Hôm nay theo giờ Việt Nam. }
+        course:
+          type: [object, "null"]
+          additionalProperties: false
+          required: [courseId, lessonsCompleted, lessonsTotal]
+          properties:
+            courseId: { type: string, maxLength: 100 }
+            lessonsCompleted: { type: integer, minimum: 0 }
+            lessonsTotal: { type: integer, minimum: 0 }
+        activity:
+          type: array
+          minItems: 84
+          maxItems: 84
+          items:
+            type: object
+            additionalProperties: false
+            required: [date, xp, minutes]
+            properties:
+              date: { type: string, format: date }
+              xp: { type: integer, minimum: 0 }
+              minutes: { type: integer, minimum: 0 }
+        mastery:
+          type: array
+          items: { $ref: "#/components/schemas/ChapterMastery" }
+        questionsAnswered: { type: integer, minimum: 0 }
+        correctAnswers: { type: integer, minimum: 0 }
+        studyMinutesThisMonth: { type: integer, minimum: 0 }
+        weakTopics:
+          type: array
+          maxItems: 3
+          items:
+            type: object
+            additionalProperties: false
+            required: [topic, chapterId, accuracy, exerciseSetId]
+            properties:
+              topic: { type: string, maxLength: 120, description: "Chủ đề của câu trong ngân hàng (nội dung học, giống nhau ở mọi chế độ)." }
+              chapterId: { type: string, maxLength: 100 }
+              accuracy: { type: number, minimum: 0, maximum: 1 }
+              exerciseSetId: { type: [string, "null"], maxLength: 100 }
+
+    AchievementCategory:
+      type: string
+      enum: [mastery, streak, completion, accuracy]
+      description: Như `AchievementCategory` của web. Cộng đồng (`community`) thêm ở M12.
+
+    AchievementRarity:
+      type: string
+      enum: [common, rare, epic, legendary]
+
+    AchievementDefinition:
+      type: object
+      additionalProperties: false
+      required: [id, title, description, category, rarity, target]
+      properties:
+        id: { type: string, pattern: "^[a-z0-9-]{1,60}$", description: "Mã cố định, như mẫu (`a-streak-7`, `a-ch1`…)." }
+        title: { type: string, minLength: 1, maxLength: 120 }
+        description: { type: string, minLength: 1, maxLength: 300 }
+        category: { $ref: "#/components/schemas/AchievementCategory" }
+        rarity: { $ref: "#/components/schemas/AchievementRarity" }
+        target: { type: integer, minimum: 1, description: "Mốc phải đạt (7 ngày, 300 câu, 80 %, 1 lần…); tiến độ của học sinh tính tới số này." }
+
+    AchievementCatalog:
+      type: object
+      required: [version, items]
+      properties:
+        version: { type: string, description: 12 kí tự đầu SHA-256 của tệp danh mục đã chuẩn hóa. }
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/AchievementDefinition" }
+
+    MyAchievement:
+      type: object
+      additionalProperties: false
+      required: [achievementId, unlockedAt, current, target]
+      properties:
+        achievementId: { type: string, pattern: "^[a-z0-9-]{1,60}$" }
+        unlockedAt: { type: [string, "null"], format: date-time, description: Null khi chưa đạt. }
+        current: { type: integer, minimum: 0, description: Tiến độ hiện tại (bằng `target` khi đã đạt). }
+        target: { type: integer, minimum: 1 }
