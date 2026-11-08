@@ -1,8 +1,15 @@
 asyncapi: 3.0.0
 info:
   title: PkKemis — thời gian thực (Socket.IO tới trình duyệt, Redis giữa các service)
-  version: 0.1.0
+  version: 0.1.1
   description: |
+    0.1.1 (lát 13.0, kiểm trên Redis 8.10 thật; mục 5.3 của M13-GATEWAY-MESSAGING.md): chỉ **thêm quyền** vào `x-redis-acl`, đúng những lệnh
+    thư viện client dự kiến thật sự gửi (đọc từ mã nguồn của chúng), và thêm `x-redis-clients` (cấu hình client bắt buộc để không cần quyền nào
+    khác). gateway thêm `setex`, `time`: script `request_rate_limiter.lua` của Spring Cloud Gateway 5.0 gọi `GET`, `TIME`, `SETEX` trên khóa thùng
+    token; thiếu thì `RedisRateLimiter` nuốt lỗi và **cho qua mọi yêu cầu**. gateway vẫn không ghi được `rv:*`, kể cả qua Lua. social thêm kênh
+    `socket.io#/#*` viết nguyên văn: Redis so mẫu của `PSUBSCRIBE` với ACL theo chữ, không theo glob, nên `&socket.io*` không đủ cho adapter.
+    identity, gateway, social thêm `client|setinfo` (Lettuce, ioredis gửi `CLIENT SETINFO` mỗi lần nối). Không bỏ quyền, khóa hay kênh nào.
+
     0.1.0 (docs/backend/M13-GATEWAY-MESSAGING.md): hợp đồng của hai đường **không phải Kafka** có từ M13. Sự kiện giữa các service vẫn ở
     `asyncapi/pkkemis.yaml` (Kafka); file này không thay nó. Cùng quy tắc chỉ thêm: thêm sự kiện, thêm trường, thêm giá trị enum; bên nhận bỏ qua
     sự kiện lạ, trường lạ.
@@ -29,20 +36,88 @@ info:
     **Khóa Redis** (`x-redis-keys`) và **quyền theo tài khoản** (`x-redis-acl`, như `x-acl` của Kafka; platform dựng tệp ACL đúng theo đó, mục 5
     của M13-GATEWAY-MESSAGING.md). Redis không lưu xuống đĩa và không bao giờ đẩy khóa ra khi đầy (`maxmemory-policy noeviction`): khóa thu hồi
     không được mất vì bộ nhớ.
+
+    **Kết nối tới Redis** (`x-redis-clients`, từ 0.1.1): mỗi service nối bằng tài khoản của nó, database 0. `HELLO` và `AUTH` không qua ACL
+    (Redis gắn cờ `no_auth`), nên RESP2 hay RESP3 đều được. Quyền duy nhất cho bước bắt tay là `client|setinfo` (chỉ ghi tên, bản thư viện lên
+    chính kết nối đó). Không service nào có `info`, `select`, `client|setname` hay cả lệnh `client`: client phải tắt bước kiểm sẵn sàng (gọi
+    `INFO`), không đặt tên kết nối, và health dùng `PING`. Lần nối bình thường không bao giờ bị `NOPERM`; `NOPERM` trong `ACL LOG` là lỗi thật.
   x-redis-keys:
     - { pattern: "rv:u:<userId>", value: "tv nhỏ nhất còn hợp lệ (số nguyên)", ttl: 960, writer: identity, readers: [gateway, social], slice: 13b }
     - { pattern: "rv:s:<sid>", value: "1 (phiên bị thu hồi)", ttl: 960, writer: identity, readers: [gateway, social], slice: 13b }
     - { pattern: "rv:epoch", value: "mốc identity đã đẩy lại mọi dòng còn hạn (không TTL)", ttl: null, writer: identity, readers: [], slice: 13b }
     - { pattern: "rt:<sha256 hex của vé>", value: "JSON {u, s, tv, r, exp} của vé", ttl: 60, writer: social, readers: [social], slice: 13d }
     - { pattern: "rl:so:<loại>:<userId>:<phút>", value: "đếm theo phút của social (tin nhắn, vé…)", ttl: 120, writer: social, readers: [social], slice: 13d }
-    - { pattern: "request_rate_limiter.{<khóa>}.tokens|timestamp", value: "thùng token của gateway (Spring Cloud Gateway)", ttl: "do gateway đặt", writer: gateway, readers: [gateway], slice: 13a }
-    - { pattern: "socket.io#*", value: "kênh pub/sub của @socket.io/redis-adapter (không phải khóa)", ttl: null, writer: social, readers: [social], slice: 13d }
+    - pattern: "request_rate_limiter.{<khóa>}.tokens|timestamp"
+      value: "thùng token của gateway (Spring Cloud Gateway)"
+      ttl: "do gateway đặt"
+      writer: gateway
+      readers: [gateway]
+      slice: 13a
+      note: |
+        Từ 0.1.1: `<khóa>` là `<routeId>.<giá trị của KeyResolver>` (`RedisRateLimiter.getKeys` của Spring Cloud Gateway 5.0). Tiền tố
+        `request_rate_limiter.` cố định trong thư viện, không đổi được bằng cấu hình, và chỉ gateway dùng nó: đó là vùng khóa riêng của gateway
+        (không có `rl:gw:*`). Script tự đặt TTL = 2 × dồn / tốc độ giây (với số mặc định của gateway.yaml: 12 đến 40 giây).
+    - pattern: "socket.io#*"
+      value: "kênh pub/sub của @socket.io/redis-adapter (không phải khóa)"
+      ttl: null
+      writer: social
+      readers: [social]
+      slice: 13d
+      note: |
+        Từ 0.1.1, kênh thật của adapter 8.3 (khóa mặc định `socket.io`, chỉ namespace `/`): phát vào `socket.io#/#` và `socket.io#/#<phòng>#`,
+        nghe bằng `PSUBSCRIBE socket.io#/#*`; hỏi đáp giữa các bản social qua `socket.io-request#/#`, `socket.io-response#/#`,
+        `socket.io-response#/#<uid>#`; đếm số bản bằng `PUBSUB NUMSUB socket.io-request#/#`. Danh sách đủ ở `x-redis-clients.social`.
   x-redis-acl:
-    identity: { keys: ["~rv:*"], channels: ["&pk:revoked"], commands: [get, set, eval, evalsha, publish, ping] }
-    gateway: { keys: ["%R~rv:*", "~request_rate_limiter.*"], channels: [], commands: [get, mget, eval, evalsha, ping] }
-    social: { keys: ["%R~rv:*", "~rt:*", "~rl:so:*"], channels: ["&pk:revoked", "&socket.io*"], commands: [get, mget, set, getdel, incr, expire, publish, subscribe, psubscribe, unsubscribe, punsubscribe, pubsub, ping] }
+    identity:
+      keys: ["~rv:*"]
+      channels: ["&pk:revoked"]
+      commands: [get, set, eval, evalsha, publish, ping, "client|setinfo"]
+      note: "`client|setinfo` từ 0.1.1 (Lettuce gửi khi nối)."
+    gateway:
+      keys: ["%R~rv:*", "~request_rate_limiter.*"]
+      channels: []
+      commands: [get, mget, eval, evalsha, ping, setex, time, "client|setinfo"]
+      note: |
+        Từ 0.1.1: `setex`, `time` cho script thùng token (`x-redis-clients.gateway.scripts`); script chạy với ACL của người gửi, nên nó chỉ ghi
+        được `request_rate_limiter.*`, còn `rv:*` chỉ đọc (`%R~`) kể cả trong Lua. `client|setinfo` vì Lettuce gửi khi nối.
+    social:
+      keys: ["%R~rv:*", "~rt:*", "~rl:so:*"]
+      channels: ["&pk:revoked", "&socket.io*", "&socket.io#/#*"]
+      commands: [get, mget, set, getdel, incr, expire, publish, subscribe, psubscribe, unsubscribe, punsubscribe, pubsub, ping, "client|setinfo"]
+      note: |
+        Từ 0.1.1: `&socket.io#/#*` viết nguyên văn vì `PSUBSCRIBE` chỉ được khi mẫu trùng **từng chữ** một mục kênh của ACL (`PUBLISH`,
+        `SUBSCRIBE` so theo glob nên `&socket.io*` đủ cho chúng). Thêm namespace Socket.IO là thêm `&socket.io#/<tên>#*` vào đây trước.
+        `client|setinfo` vì ioredis gửi khi nối.
     ops: { keys: ["%R~*"], channels: [], commands: [get, mget, ttl, scan, type, info, ping], note: "chỉ đọc, cho scripts/gateway-check.sh" }
     default: { off: true }
+  x-redis-clients:
+    identity:
+      library: "lettuce-core 7.5 (Spring Boot 4.1), RedisClient dựng tay, không qua Spring Data Redis"
+      onConnect: ["HELLO 3 AUTH identity <mật khẩu>", "CLIENT SETINFO lib-name Lettuce", "CLIENT SETINFO lib-ver <bản>"]
+      scripts: { raiseOnly: [get, set] }
+      require:
+        - "database 0 (không có /<số> trong REDIS_URL), không đặt clientName"
+        - "ClientOptions.maintNotificationsConfig(MaintNotificationsConfig.disabled()): Lettuce 7 mặc định gửi CLIENT MAINT_NOTIFICATIONS, Redis 8.10 không có lệnh con này"
+        - "health không chạm Redis"
+    gateway:
+      library: "Spring Cloud Gateway 5.0 (RedisRateLimiter), Spring Data Redis 4.1 + Lettuce 7.5 (Spring Boot 4.1)"
+      onConnect: ["HELLO 3 AUTH gateway <mật khẩu>", "CLIENT SETINFO lib-name Lettuce", "CLIENT SETINFO lib-ver <bản>"]
+      calls: ["MGET rv:u:<sub> rv:s:<sid>", "EVALSHA <sha của request_rate_limiter.lua>, gặp NOSCRIPT thì EVAL (DefaultReactiveScriptExecutor)"]
+      scripts: { request_rate_limiter.lua: [get, time, setex] }
+      require:
+        - "database 0, không đặt spring.data.redis.client-name"
+        - "LettuceClientOptionsBuilderCustomizer đặt MaintNotificationsConfig.disabled()"
+        - "bean `redisHealthIndicator` gọi PING thay chỉ báo mặc định của Spring Boot (nó gọi INFO server: thiếu quyền thì luôn báo DOWN)"
+    social:
+      library: "ioredis 5.11 hay 6.x, @socket.io/redis-adapter 8.3 (adapter thường, khóa mặc định socket.io)"
+      onConnect: ["AUTH social <mật khẩu> (ioredis 5) hay HELLO 3 AUTH social <mật khẩu> (ioredis 6)", "CLIENT SETINFO LIB-VER <bản>", "CLIENT SETINFO LIB-NAME ioredis"]
+      psubscribe: ["socket.io#/#*"]
+      subscribe: ["pk:revoked", "socket.io-request#/#", "socket.io-response#/#", "socket.io-response#/#<uid>#"]
+      publish: ["socket.io#/#", "socket.io#/#<phòng>#", "socket.io-request#/#", "socket.io-response#/#", "socket.io-response#/#<uid>#"]
+      require:
+        - "enableReadyCheck: false (bước kiểm sẵn sàng gọi INFO; Redis không lưu đĩa nên không bao giờ đang nạp dữ liệu)"
+        - "db 0, không đặt connectionName (CLIENT SETNAME)"
+        - "chỉ namespace Socket.IO `/`; không dùng adapter sharded (SSUBSCRIBE, SPUBLISH)"
   tags:
     - name: realtime
       description: Socket.IO, social đẩy tới trình duyệt
