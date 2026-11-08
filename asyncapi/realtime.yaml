@@ -1,0 +1,396 @@
+asyncapi: 3.0.0
+info:
+  title: PkKemis — thời gian thực (Socket.IO tới trình duyệt, Redis giữa các service)
+  version: 0.1.0
+  description: |
+    0.1.0 (docs/backend/M13-GATEWAY-MESSAGING.md): hợp đồng của hai đường **không phải Kafka** có từ M13. Sự kiện giữa các service vẫn ở
+    `asyncapi/pkkemis.yaml` (Kafka); file này không thay nó. Cùng quy tắc chỉ thêm: thêm sự kiện, thêm trường, thêm giá trị enum; bên nhận bỏ qua
+    sự kiện lạ, trường lạ.
+
+    **1. Socket.IO tới trình duyệt** (server `gateway`, lát `13d`, `13e`). social chạy máy chủ Socket.IO v4 ở `path` `/realtime`, chỉ WebSocket,
+    sau gateway (openapi/gateway.yaml). Trình duyệt không giữ token: web (BFF) xin vé dùng một lần (social.yaml `POST /v1/realtime/tickets`), trình
+    duyệt gửi vé trong gói CONNECT (`auth: { ticket }`). social đổi vé (Redis `GETDEL`), gắn kết nối vào **phòng của chính người đó**
+    (`user:<userId>`, trình duyệt không xin vào phòng nào được) và từ đó chỉ **đẩy xuống**: trình duyệt không gửi sự kiện nào (mọi thao tác ghi đi
+    HTTP qua web). Vé sai, hết hạn, đã dùng: `connect_error` với `data.code` = `ticket_invalid`; tài khoản bị khóa hay phiên bị thu hồi:
+    `session_ended`.
+    - Mỗi sự kiện là một lời gọi `emit(<name>, <payload>)` với đúng **một** đối số là đối tượng JSON trong `payload` dưới đây. Không có ack.
+    - Không có mã tài khoản (UUID) của ai trong mọi sự kiện: người là `Person` (`handle`), như social.yaml. Không có chữ theo chế độ hiển thị:
+      chữ do web dựng (luật chế độ, AGENTS.md mục 2.1). Tin nhắn mang chữ người dùng viết, giống hệt ở mọi chế độ.
+    - Cùng luật che như HTTP: tin của người mình đã chặn là `blockedAuthor` (không chữ, không ảnh); người không còn ở nhóm không nhận gì của nhóm.
+    - **Sự kiện là gợi ý, cơ sở dữ liệu là sự thật.** Socket.IO không giữ sự kiện khi mất kết nối; trình duyệt nối lại thì đọc lại qua HTTP
+      (`GET /v1/me/summary`, `GET /v1/conversations`, `GET /v1/conversations/{id}/messages?after=<seq>`). Thứ tự và chống trùng tin nhắn theo
+      `seq` (mục 7.4 của M13-GATEWAY-MESSAGING.md).
+    - Nhiều tab: mỗi tab một kết nối (tối đa 10 mỗi người); mọi sự kiện của một người tới mọi kết nối của người đó.
+
+    **2. Redis giữa identity và social** (server `redis`, lát `13b`, `13d`): kênh pub/sub `pk:revoked` báo một lần thu hồi token để social đóng
+    ngay các kết nối của phiên đó. Mất tin (Redis pub/sub không giữ) không làm hỏng an toàn: gateway kiểm khóa `rv:*` ở mọi yêu cầu HTTP, social
+    kiểm lại mọi kết nối mỗi 60 giây và đóng kết nối sau `maxAgeSeconds`.
+
+    **Khóa Redis** (`x-redis-keys`) và **quyền theo tài khoản** (`x-redis-acl`, như `x-acl` của Kafka; platform dựng tệp ACL đúng theo đó, mục 5
+    của M13-GATEWAY-MESSAGING.md). Redis không lưu xuống đĩa và không bao giờ đẩy khóa ra khi đầy (`maxmemory-policy noeviction`): khóa thu hồi
+    không được mất vì bộ nhớ.
+  x-redis-keys:
+    - { pattern: "rv:u:<userId>", value: "tv nhỏ nhất còn hợp lệ (số nguyên)", ttl: 960, writer: identity, readers: [gateway, social], slice: 13b }
+    - { pattern: "rv:s:<sid>", value: "1 (phiên bị thu hồi)", ttl: 960, writer: identity, readers: [gateway, social], slice: 13b }
+    - { pattern: "rv:epoch", value: "mốc identity đã đẩy lại mọi dòng còn hạn (không TTL)", ttl: null, writer: identity, readers: [], slice: 13b }
+    - { pattern: "rt:<sha256 hex của vé>", value: "JSON {u, s, tv, r, exp} của vé", ttl: 60, writer: social, readers: [social], slice: 13d }
+    - { pattern: "rl:so:<loại>:<userId>:<phút>", value: "đếm theo phút của social (tin nhắn, vé…)", ttl: 120, writer: social, readers: [social], slice: 13d }
+    - { pattern: "request_rate_limiter.{<khóa>}.tokens|timestamp", value: "thùng token của gateway (Spring Cloud Gateway)", ttl: "do gateway đặt", writer: gateway, readers: [gateway], slice: 13a }
+    - { pattern: "socket.io#*", value: "kênh pub/sub của @socket.io/redis-adapter (không phải khóa)", ttl: null, writer: social, readers: [social], slice: 13d }
+  x-redis-acl:
+    identity: { keys: ["~rv:*"], channels: ["&pk:revoked"], commands: [get, set, eval, evalsha, publish, ping] }
+    gateway: { keys: ["%R~rv:*", "~request_rate_limiter.*"], channels: [], commands: [get, mget, eval, evalsha, ping] }
+    social: { keys: ["%R~rv:*", "~rt:*", "~rl:so:*"], channels: ["&pk:revoked", "&socket.io*"], commands: [get, mget, set, getdel, incr, expire, publish, subscribe, psubscribe, unsubscribe, punsubscribe, pubsub, ping] }
+    ops: { keys: ["%R~*"], channels: [], commands: [get, mget, ttl, scan, type, info, ping], note: "chỉ đọc, cho scripts/gateway-check.sh" }
+    default: { off: true }
+  tags:
+    - name: realtime
+      description: Socket.IO, social đẩy tới trình duyệt
+    - name: revocation
+      description: Thu hồi token (identity → social qua Redis)
+
+defaultContentType: application/json
+
+servers:
+  gateway:
+    host: gateway:8080
+    protocol: ws
+    pathname: /realtime
+    description: |
+      Socket.IO v4 (Engine.IO 4) chỉ qua WebSocket, sau gateway. Trình duyệt dùng cổng công khai của gateway (`GATEWAY_PUBLIC_URL`, mặc định
+      `http://localhost:3001` ở máy này); gateway chuyển tới `ws://social:8080/realtime/`. Kiểm `Origin`, giới hạn số lần bắt tay: openapi/gateway.yaml.
+  redis:
+    host: redis:6379
+    protocol: redis
+    description: |
+      Redis 8 một máy trong Docker Compose (pk-kemis-platform), không publish cổng, không lưu xuống đĩa, mỗi service một tài khoản ACL
+      (`x-redis-acl`), tài khoản `default` tắt.
+
+channels:
+  userEvents:
+    address: user
+    title: Phòng của một người (Socket.IO)
+    servers:
+      - $ref: "#/servers/gateway"
+    description: |
+      Mỗi kết nối đã đổi vé nằm trong phòng `user:<userId>` của người đó. social phát vào phòng này sau khi giao dịch gây ra sự kiện đã ghi
+      xong (không bao giờ phát điều chưa ghi). Tên `address` là tên logic; trình duyệt không thấy tên phòng.
+    messages:
+      ready: { $ref: "#/components/messages/Ready" }
+      notificationChanged: { $ref: "#/components/messages/NotificationChanged" }
+      messageCreated: { $ref: "#/components/messages/MessageCreated" }
+      conversationUpdated: { $ref: "#/components/messages/ConversationUpdated" }
+      conversationRemoved: { $ref: "#/components/messages/ConversationRemoved" }
+      conversationRead: { $ref: "#/components/messages/ConversationRead" }
+      sessionEnded: { $ref: "#/components/messages/SessionEnded" }
+    bindings:
+      ws:
+        method: GET
+        query:
+          type: object
+          required: [EIO, transport]
+          properties:
+            EIO: { type: string, const: "4" }
+            transport: { type: string, const: websocket }
+        bindingVersion: "0.1.0"
+
+  revocations:
+    address: pk:revoked
+    title: Thu hồi token (Redis pub/sub)
+    servers:
+      - $ref: "#/servers/redis"
+    description: identity phát sau khi đã ghi khóa `rv:*`; social nghe để đóng kết nối thời gian thực của người hay phiên bị thu hồi.
+    messages:
+      tokenRevoked: { $ref: "#/components/messages/TokenRevoked" }
+
+operations:
+  socialPushesUserEvents:
+    action: send
+    channel: { $ref: "#/channels/userEvents" }
+    title: social đẩy sự kiện tới các kết nối của một người
+    description: |
+      `ready` ngay sau khi đổi vé; `notification.changed` sau mọi giao dịch đổi thông báo hay số lời mời của người đó (gộp trong 250 ms mỗi người);
+      `message.created`, `conversation.*` sau giao dịch tin nhắn (lát `13e`); `session.ended` trước khi đóng kết nối.
+    messages:
+      - $ref: "#/channels/userEvents/messages/ready"
+      - $ref: "#/channels/userEvents/messages/notificationChanged"
+      - $ref: "#/channels/userEvents/messages/messageCreated"
+      - $ref: "#/channels/userEvents/messages/conversationUpdated"
+      - $ref: "#/channels/userEvents/messages/conversationRemoved"
+      - $ref: "#/channels/userEvents/messages/conversationRead"
+      - $ref: "#/channels/userEvents/messages/sessionEnded"
+    x-service: social
+    x-slice: 13d
+
+  webReceivesUserEvents:
+    action: receive
+    channel: { $ref: "#/channels/userEvents" }
+    title: Trình duyệt (web) nhận sự kiện
+    description: |
+      `RealtimeProvider` của web (lát `13f`): một kết nối mỗi tab, xin vé qua server action mỗi lần nối (kể cả nối lại), bỏ qua sự kiện lạ. Chuông
+      và số trên menu theo `notification.changed`; hộp thư và cuộc trò chuyện đang mở theo `message.created`, `conversation.*`; `session.ended`
+      (`revoked`, `locked`) thì hỏi web phiên còn không rồi nối lại hay về trang đăng nhập.
+    messages:
+      - $ref: "#/channels/userEvents/messages/ready"
+      - $ref: "#/channels/userEvents/messages/notificationChanged"
+      - $ref: "#/channels/userEvents/messages/messageCreated"
+      - $ref: "#/channels/userEvents/messages/conversationUpdated"
+      - $ref: "#/channels/userEvents/messages/conversationRemoved"
+      - $ref: "#/channels/userEvents/messages/conversationRead"
+      - $ref: "#/channels/userEvents/messages/sessionEnded"
+    x-service: web
+    x-slice: 13f
+
+  identityPublishesRevocations:
+    action: send
+    channel: { $ref: "#/channels/revocations" }
+    title: identity báo một lần thu hồi token
+    description: |
+      Sau khi giao dịch gây ra thu hồi đã ghi (khóa, đổi vai trò, đăng xuất…, identity.yaml 0.10.0) và khóa `rv:*` đã được đặt. Đẩy lại các dòng
+      chưa đẩy được (Redis tắt) cũng phát lại tin này; bên nghe xử lý lặp được.
+    messages:
+      - $ref: "#/channels/revocations/messages/tokenRevoked"
+    x-service: identity
+    x-slice: 13b
+
+  socialReceivesRevocations:
+    action: receive
+    channel: { $ref: "#/channels/revocations" }
+    title: social đóng kết nối của phiên bị thu hồi
+    description: |
+      Với mỗi kết nối của `userId`: `sessionId` có và trùng `sid` của kết nối, hay `minTokenVersion` có và lớn hơn `tv` của kết nối: gửi
+      `session.ended` (`revoked`, hay `locked` khi `cause` là `lock`, `moderation_ban`) rồi đóng. Lặp được.
+    messages:
+      - $ref: "#/channels/revocations/messages/tokenRevoked"
+    x-service: social
+    x-slice: 13d
+
+components:
+  messages:
+    Ready:
+      name: ready
+      title: Đã kết nối
+      summary: Gửi ngay sau khi đổi vé thành công. Trình duyệt đặt lại các số trên menu theo đây rồi đọc bù những gì có thể đã lỡ.
+      payload: { $ref: "#/components/schemas/ReadyPayload" }
+      x-slice: 13d
+      examples:
+        - name: ketNoi
+          payload:
+            serverTime: "2026-11-09T12:00:00.000Z"
+            maxAgeSeconds: 3600
+            counts: { unreadNotifications: 2, incomingRequests: 1, unreadMessages: 3, latestNotificationAt: "2026-11-09T11:58:00.000Z" }
+
+    NotificationChanged:
+      name: notification.changed
+      title: Thông báo hay số lời mời đổi
+      summary: |
+        Có thông báo mới, dòng gộp nhận thêm người, thông báo bị xóa, đã đọc ở tab khác, số lời mời đến đổi, số tin chưa đọc đổi. Chỉ mang số, không
+        mang thông báo: web đọc danh sách qua HTTP khi chuông đang mở hay khi người dùng mở chuông (cùng bộ lọc chặn, khóa như M10, M12).
+      payload: { $ref: "#/components/schemas/Counts" }
+      x-slice: 13d
+      examples:
+        - name: loiMoiMoi
+          payload: { unreadNotifications: 3, incomingRequests: 2, unreadMessages: 3, latestNotificationAt: "2026-11-09T12:01:30.000Z" }
+
+    MessageCreated:
+      name: message.created
+      title: Tin mới trong một cuộc trò chuyện của mình
+      summary: |
+        Mỗi thành viên hiện tại (đọc được tin đó) nhận một bản theo góc nhìn của mình: tin của người mình đã chặn là `blockedAuthor`; tin của chính
+        mình có `clientKey` (khớp bong bóng "đang gửi", kể cả ở tab khác). `conversation` là dòng hộp thư sau tin này.
+      payload: { $ref: "#/components/schemas/MessageCreatedPayload" }
+      x-slice: 13e
+      examples:
+        - name: tinMoi
+          payload:
+            unreadMessages: 4
+            conversation:
+              id: 0f1e2d3c-4b5a-4697-8a8b-9c0d1e2f3a4b
+              kind: group
+              title: Nhóm ôn chương 4
+              other: null
+              memberCount: 4
+              lastSeq: 13
+              lastActivityAt: "2026-11-09T12:42:00.000Z"
+              unread: 3
+              lastMessage:
+                seq: 13
+                kind: text
+                author: { handle: p3n8w1v6rz0c, fullName: Đỗ Thanh Tâm, avatarInitials: TT, avatarUrl: null, frameId: null, role: student, level: 5, joinedOn: "2026-09-03" }
+                mine: false
+                text: Câu 5 mình ra 2,24 lít khí.
+                imageCount: 0
+                system: null
+                blockedAuthor: false
+                createdAt: "2026-11-09T12:42:00.000Z"
+            message:
+              id: 9a0b1c2d-3e4f-4a5b-8c6d-7e8f9a0b1c2d
+              conversationId: 0f1e2d3c-4b5a-4697-8a8b-9c0d1e2f3a4b
+              seq: 13
+              kind: text
+              author: { handle: p3n8w1v6rz0c, fullName: Đỗ Thanh Tâm, avatarInitials: TT, avatarUrl: null, frameId: null, role: student, level: 5, joinedOn: "2026-09-03" }
+              mine: false
+              body: Câu 5 mình ra 2,24 lít khí.
+              images: []
+              system: null
+              blockedAuthor: false
+              purged: false
+              createdAt: "2026-11-09T12:42:00.000Z"
+
+    ConversationUpdated:
+      name: conversation.updated
+      title: Một cuộc trò chuyện của mình đổi (hay mình vừa được thêm vào)
+      summary: Lập nhóm, được thêm vào nhóm, đổi tên, thêm hay bớt người, đổi trưởng nhóm. Web cập nhật dòng hộp thư; trang đang mở thì đọc lại chi tiết.
+      payload: { $ref: "#/components/schemas/ConversationUpdatedPayload" }
+      x-slice: 13e
+      examples:
+        - name: duocThem
+          payload:
+            change: added_me
+            unreadMessages: 1
+            conversation:
+              id: 2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e
+              kind: group
+              title: Nhóm ôn chương 5
+              other: null
+              memberCount: 3
+              lastSeq: 1
+              lastActivityAt: "2026-11-09T13:00:00.000Z"
+              unread: 0
+              lastMessage:
+                seq: 1
+                kind: system
+                author: null
+                mine: false
+                text: null
+                imageCount: 0
+                system:
+                  code: group_created
+                  actor: { handle: b4c8d2e6f0a1, fullName: Lê Bảo Ngọc, avatarInitials: BN, avatarUrl: null, frameId: null, role: student, level: 8, joinedOn: "2026-08-30" }
+                  targets: []
+                  title: Nhóm ôn chương 5
+                blockedAuthor: false
+                createdAt: "2026-11-09T13:00:00.000Z"
+
+    ConversationRemoved:
+      name: conversation.removed
+      title: Mình không còn ở một cuộc trò chuyện
+      summary: Mình rời nhóm (ở tab khác) hay bị trưởng nhóm mời ra. Web bỏ dòng hộp thư; đang mở cuộc đó thì hiện "Không tìm thấy cuộc trò chuyện".
+      payload: { $ref: "#/components/schemas/ConversationRemovedPayload" }
+      x-slice: 13e
+      examples:
+        - name: biMoiRa
+          payload: { conversationId: 2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e, reason: removed, unreadMessages: 1 }
+
+    ConversationRead:
+      name: conversation.read
+      title: Mình đã đọc một cuộc trò chuyện (ở tab khác)
+      summary: Sau `POST /v1/conversations/{id}/read` đổi thật. Chỉ tới các kết nối của chính mình; người khác không biết (không có "Đã xem").
+      payload: { $ref: "#/components/schemas/ConversationReadPayload" }
+      x-slice: 13e
+      examples:
+        - name: daDoc
+          payload: { conversationId: 0f1e2d3c-4b5a-4697-8a8b-9c0d1e2f3a4b, lastReadSeq: 13, unread: 0, unreadMessages: 1 }
+
+    SessionEnded:
+      name: session.ended
+      title: Kết nối sắp bị đóng
+      summary: |
+        `revoked`: phiên hay token bị thu hồi (đổi vai trò, đăng xuất, đổi mật khẩu ở thiết bị khác); `locked`: tài khoản bị khóa; `expired`: hết
+        `maxAgeSeconds` (nối lại ngay bằng vé mới); `replaced`: quá 10 kết nối, kết nối cũ nhất bị đóng. Với `revoked`, `locked` web hỏi server của
+        nó phiên còn không (làm mới token một lần) rồi nối lại hay về trang đăng nhập.
+      payload: { $ref: "#/components/schemas/SessionEndedPayload" }
+      x-slice: 13d
+      examples:
+        - name: biKhoa
+          payload: { reason: locked }
+
+    TokenRevoked:
+      name: token.revoked
+      title: Một lần thu hồi token
+      summary: |
+        Thu hồi mọi token của một người có `tv` nhỏ hơn `minTokenVersion`, hay mọi token của một phiên (`sessionId`). Đúng một trong hai trường
+        khác null. Không có lý do của admin, không email; `cause` là mã.
+      payload: { $ref: "#/components/schemas/TokenRevokedPayload" }
+      x-slice: 13b
+      examples:
+        - name: khoaTaiKhoan
+          payload: { userId: 3f1c9a52-7b1e-4d8a-9c41-0e5b2d7f6a10, sessionId: null, minTokenVersion: 4, cause: lock, at: "2026-11-09T12:10:00.000Z" }
+        - name: dangXuatMotThietBi
+          payload: { userId: 3f1c9a52-7b1e-4d8a-9c41-0e5b2d7f6a10, sessionId: 7c8d9e0f-1a2b-4c3d-9e4f-5a6b7c8d9e0f, minTokenVersion: null, cause: logout, at: "2026-11-09T12:11:00.000Z" }
+
+  schemas:
+    Counts:
+      type: object
+      additionalProperties: false
+      description: Các số trên menu và chuông, như `Summary` của social.yaml 0.3.0 (kèm `unreadMessages`).
+      required: [unreadNotifications, incomingRequests, unreadMessages, latestNotificationAt]
+      properties:
+        unreadNotifications: { type: integer, minimum: 0 }
+        incomingRequests: { type: integer, minimum: 0 }
+        unreadMessages: { type: integer, minimum: 0 }
+        latestNotificationAt: { type: [string, "null"], format: date-time }
+
+    ReadyPayload:
+      type: object
+      additionalProperties: false
+      required: [serverTime, maxAgeSeconds, counts]
+      properties:
+        serverTime: { type: string, format: date-time }
+        maxAgeSeconds: { type: integer, minimum: 60, maximum: 86400 }
+        counts: { $ref: "#/components/schemas/Counts" }
+
+    MessageCreatedPayload:
+      type: object
+      additionalProperties: false
+      required: [conversation, message, unreadMessages]
+      properties:
+        conversation: { $ref: "../openapi/social.yaml#/components/schemas/ConversationSummary" }
+        message: { $ref: "../openapi/social.yaml#/components/schemas/Message" }
+        unreadMessages: { type: integer, minimum: 0 }
+
+    ConversationUpdatedPayload:
+      type: object
+      additionalProperties: false
+      required: [change, conversation, unreadMessages]
+      properties:
+        change: { type: string, enum: [created, added_me, renamed, members_changed, owner_changed] }
+        conversation: { $ref: "../openapi/social.yaml#/components/schemas/ConversationSummary" }
+        unreadMessages: { type: integer, minimum: 0 }
+
+    ConversationRemovedPayload:
+      type: object
+      additionalProperties: false
+      required: [conversationId, reason, unreadMessages]
+      properties:
+        conversationId: { type: string, format: uuid }
+        reason: { type: string, enum: [left, removed] }
+        unreadMessages: { type: integer, minimum: 0 }
+
+    ConversationReadPayload:
+      type: object
+      additionalProperties: false
+      required: [conversationId, lastReadSeq, unread, unreadMessages]
+      properties:
+        conversationId: { type: string, format: uuid }
+        lastReadSeq: { type: integer, minimum: 0 }
+        unread: { type: integer, minimum: 0, maximum: 99 }
+        unreadMessages: { type: integer, minimum: 0 }
+
+    SessionEndedPayload:
+      type: object
+      additionalProperties: false
+      required: [reason]
+      properties:
+        reason: { type: string, enum: [revoked, locked, expired, replaced] }
+
+    TokenRevokedPayload:
+      type: object
+      additionalProperties: false
+      required: [userId, sessionId, minTokenVersion, cause, at]
+      properties:
+        userId: { type: string, format: uuid }
+        sessionId: { type: [string, "null"], format: uuid }
+        minTokenVersion: { type: [integer, "null"], minimum: 1 }
+        cause: { type: string, enum: [lock, moderation_ban, role_change, logout_all, password_reset, password_change, logout, refresh_reuse] }
+        at: { type: string, format: date-time }

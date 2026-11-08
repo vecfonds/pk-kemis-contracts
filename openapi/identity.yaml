@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: PkKemis identity
-  version: 0.9.0
+  version: 0.10.0
   summary: Tài khoản, đăng nhập, token và vai trò.
   description: |
     Đã được chủ dự án duyệt ngày 13/10/2026 (docs/backend/M1-IDENTITY.md).
@@ -30,12 +30,32 @@ info:
     sự kiện (phải còn là admin), lý do ghi "Vi phạm quy tắc Cộng đồng", và `AuditLogEntry.detail` có `source: community`,
     `moderationActionId`, `reasonCode`. Không khóa admin; tài khoản đã khóa thì không làm gì. Không thao tác REST nào đổi hành vi hay phản hồi.
 
+    0.10.0 (docs/backend/M13-GATEWAY-MESSAGING.md, lát `13b`, chỉ thêm): **chặn access token tức thì**. Trước bản này access token còn dùng
+    được tới khi hết hạn (tối đa 15 phút) sau khi khóa tài khoản, đổi vai trò, đăng xuất.
+    - Access token có thêm claim `tv` (phiên bản token của tài khoản, số nguyên ≥ 0; token cũ không có claim này được coi là 0). identity tăng
+      `tv` của tài khoản 1 đơn vị khi: **khóa** (bằng tay ở `/admin/users` hay do kiểm duyệt Cộng đồng), **đổi vai trò**, **đăng xuất mọi thiết
+      bị**, **đặt lại mật khẩu qua email**. Mọi access token có `tv` nhỏ hơn bị từ chối ngay.
+    - Thu hồi theo **phiên** (`sid`): **đăng xuất thiết bị này**, **đổi mật khẩu** (mọi phiên trừ phiên hiện tại), refresh token bị **dùng lại**
+      (cả họ bị thu hồi, như trước). Mọi access token của phiên đó bị từ chối ngay.
+    - identity ghi mỗi lần thu hồi vào bảng `token_revocations` **cùng giao dịch** với thay đổi gây ra nó, rồi đẩy lên Redis: khóa
+      `rv:u:<userId>` = `tv` nhỏ nhất còn hợp lệ, `rv:s:<sid>` = `1`, cả hai sống 960 giây (thời gian sống của access token + 60 giây lệch đồng
+      hồ), và phát tin `pk:revoked` (asyncapi/realtime.yaml 0.1.0). Redis tắt thì dòng nằm chờ và được đẩy khi Redis trở lại; Redis khởi động
+      lại (mất dữ liệu) thì identity đẩy lại mọi dòng còn hạn. Không có Redis (`REDIS_URL` trống) thì như trước bản này.
+    - **Gateway** (openapi/gateway.yaml 0.1.0) kiểm hai khóa đó ở mọi yêu cầu có token và trả 401 `token_revoked`; social đóng kết nối thời gian
+      thực của phiên bị thu hồi. Các service sau gateway vẫn tự kiểm chữ ký JWT như cũ (không kiểm Redis).
+    - Làm mới (`/v1/auth/refresh`) luôn cấp token với `tv` hiện tại của tài khoản, nên sau khi đổi vai trò, web làm mới một lần là có token mới
+      với vai trò mới (phiên không mất).
+    - Từ M13 web gọi identity **qua gateway** (`http://gateway:8080/identity`, kèm `X-Bff-Key`). `X-Forwarded-For` đi qua gateway nguyên vẹn
+      (gateway chỉ nhận nó từ web, nơi có khóa BFF), nên chặn dò mật khẩu theo IP vẫn đúng người.
+
     - Chỉ thêm, không xóa hay đổi nghĩa của trường đã phát hành.
     - Từ 0.3.0 các thao tác admin (`/v1/admin/*`) đã được cài (lát D của M4); `x-phase: 2` còn lại, nếu có, là thao tác chưa cài.
     - Thông báo lỗi (`detail`) bằng tiếng Việt, hiển thị được cho người dùng; mã `code` ổn định, dùng để xử lý trong mã.
 servers:
   - url: http://identity:8080
     description: Mạng Docker Compose (giai đoạn 1, chưa có gateway)
+  - url: http://gateway:8080/identity
+    description: "0.10.0 (M13, lát 13c): web gọi qua gateway, kèm header `X-Bff-Key` (openapi/gateway.yaml). `/internal/**` và JWKS không đi qua gateway."
 # Mặc định cần access token; API công khai ghi `security: []` ở từng thao tác.
 security:
   - bearerAuth: []
@@ -148,7 +168,9 @@ paths:
       tags: [auth]
       operationId: logout
       summary: Đăng xuất thiết bị này
-      description: Thu hồi refresh token được gửi lên. Luôn trả 204, kể cả khi token đã hết hạn, để đăng xuất không bao giờ kẹt.
+      description: |
+        Thu hồi refresh token được gửi lên. Luôn trả 204, kể cả khi token đã hết hạn, để đăng xuất không bao giờ kẹt.
+        0.10.0 (M13): thu hồi cả phiên (`sid`) của refresh token đó: access token của phiên này bị gateway từ chối ngay (`token_revoked`).
       security: []
       requestBody:
         required: true
@@ -163,7 +185,9 @@ paths:
       tags: [auth]
       operationId: logoutAll
       summary: Đăng xuất mọi thiết bị
-      description: Thu hồi mọi refresh token của người dùng. Access token đang còn hạn hết hiệu lực khi hết hạn (tối đa 15 phút).
+      description: |
+        Thu hồi mọi refresh token của người dùng. Access token đang còn hạn hết hiệu lực khi hết hạn (tối đa 15 phút).
+        0.10.0 (M13): tăng `tv` của tài khoản, nên mọi access token đang còn hạn (kể cả của thiết bị đang gọi) bị gateway từ chối ngay.
       responses:
         "204": { description: Đã đăng xuất mọi thiết bị }
         "401": { $ref: "#/components/responses/Unauthorized" }
@@ -193,7 +217,9 @@ paths:
       tags: [auth]
       operationId: resetPassword
       summary: Đặt lại mật khẩu bằng mã trong email
-      description: Đặt xong, mọi phiên (refresh token) của người dùng bị thu hồi; phải đăng nhập lại.
+      description: |
+        Đặt xong, mọi phiên (refresh token) của người dùng bị thu hồi; phải đăng nhập lại.
+        0.10.0 (M13): tăng `tv`, nên mọi access token còn hạn bị gateway từ chối ngay.
       security: []
       requestBody:
         required: true
@@ -290,7 +316,9 @@ paths:
       tags: [me]
       operationId: changePassword
       summary: Đổi mật khẩu
-      description: Đổi xong, mọi phiên khác (refresh token khác) bị thu hồi; phiên hiện tại được giữ.
+      description: |
+        Đổi xong, mọi phiên khác (refresh token khác) bị thu hồi; phiên hiện tại được giữ.
+        0.10.0 (M13): access token của các phiên khác cũng bị từ chối ngay (thu hồi theo `sid`); phiên đang gọi không bị ảnh hưởng.
       requestBody:
         required: true
         content:
@@ -383,6 +411,8 @@ paths:
       description: |
         Admin không tự đổi vai trò của mình (`self_action_forbidden`). Không hạ được quản trị viên cuối cùng (403, từ 0.6.0 mã `last_admin`;
         trước đó là `forbidden`). Mọi thao tác ghi vào nhật ký kiểm toán.
+        0.10.0 (M13): đổi vai trò thật thì tăng `tv`: access token mang vai trò cũ bị từ chối ngay; refresh token giữ nguyên, nên web làm mới một
+        lần là người đó tiếp tục với vai trò mới.
       parameters:
         - { $ref: "#/components/parameters/UserId" }
       requestBody:
@@ -409,6 +439,7 @@ paths:
       description: |
         Thu hồi mọi refresh token. Admin không tự khóa mình (`self_action_forbidden`). Không khóa được quản trị viên cuối cùng (403, từ 0.6.0 mã
         `last_admin`; trước đó là `forbidden`).
+        0.10.0 (M13): tăng `tv`, nên access token còn hạn bị gateway từ chối ngay (`token_revoked`) và kết nối thời gian thực bị đóng.
       parameters:
         - { $ref: "#/components/parameters/UserId" }
       requestBody:
@@ -552,6 +583,8 @@ components:
       description: |
         Access token RS256, sống tối đa 15 phút. Claim: `sub` (mã người dùng), `role`, `sid` (mã phiên đăng nhập, để giữ phiên hiện tại khi đổi mật khẩu), `iss` = `pk-kemis-identity`, `iat`, `exp`, `jti`.
         Không chứa email hay họ tên.
+        0.10.0 (M13): thêm claim `tv` (phiên bản token của tài khoản; vắng = 0). Gateway từ chối token có `tv` nhỏ hơn `rv:u:<sub>` hay có `sid`
+        nằm trong `rv:s:<sid>` của Redis (401 `token_revoked`). Bên kiểm token khác bỏ qua claim lạ.
     internalKey:
       type: apiKey
       in: header

@@ -1,0 +1,374 @@
+openapi: 3.1.0
+info:
+  title: PkKemis gateway
+  version: 0.1.0
+  summary: Cửa vào duy nhất từ web (BFF) và trình duyệt tới các service (Spring Cloud Gateway).
+  description: |
+    0.1.0 (docs/backend/M13-GATEWAY-MESSAGING.md, lát `13a`): service mới `pk-kemis-gateway`, Spring Cloud Gateway bản WebFlux (Java 25,
+    Spring Boot, Maven; PLAN.md mục 6.2). Hợp đồng này chỉ ghi điều gateway **tự làm** (định tuyến, khóa BFF, kiểm token, chặn token đã thu hồi,
+    giới hạn tần suất, header, lỗi riêng của gateway). Thân yêu cầu và phản hồi của từng đường là của hợp đồng service (identity.yaml,
+    learning.yaml, classroom.yaml, commerce.yaml, social.yaml): gateway chuyển nguyên, không đổi một byte.
+
+    **Hai kiểu người gọi, một cổng (`:8080` trong mạng Compose, publish ra máy ở `GATEWAY_PORT`, mặc định 3001):**
+    - **web (BFF)** gọi API: `/<service>/v1/**`, luôn kèm header `X-Bff-Key` (bí mật chung giữa web và gateway). Thiếu hay sai khóa: 404
+      `not_found` (với người ngoài, API không tồn tại). Trình duyệt **không bao giờ** gọi API qua gateway: token nằm trong cookie httpOnly của
+      web.
+    - **trình duyệt** chỉ dùng hai thứ: kết nối thời gian thực `/realtime/` (Socket.IO, chỉ WebSocket, xác thực bằng vé dùng một lần; social.yaml
+      `POST /v1/realtime/tickets`, asyncapi/realtime.yaml) và URL ký sẵn của kho ảnh (`/pk-community-incoming/**`, `/pk-community-media/**`,
+      `/pk-message-media/**`, chuyển tới kho S3 với `Host` giữ nguyên để chữ ký khớp). Không cần khóa BFF.
+
+    **`/realtime/`** (không có trong `paths` vì là bắt tay WebSocket, mô tả đầy đủ ở asyncapi/realtime.yaml): trình duyệt mở bằng socket.io-client
+    v4 (`path: "/realtime"`, `transports: ["websocket"]`). Gateway chỉ nhận yêu cầu nâng cấp WebSocket (`EIO=4&transport=websocket`;
+    long-polling: 404 `not_found`, vì polling cần phiên dính một máy), kiểm `Origin` đúng địa chỉ web (`PUBLIC_URL`; sai: 403
+    `origin_forbidden`), giới hạn số lần bắt tay theo địa chỉ khách (429), rồi chuyển tới `ws://social:8080/realtime/`. Gateway **không** đọc
+    vé: vé đi trong gói CONNECT của Socket.IO sau khi nâng cấp (không nằm trong URL, không vào log); social đổi vé lấy người dùng. Không cần khóa
+    BFF, không có token. Khung từ trình duyệt tối đa 4 KB (kết nối chỉ để đẩy xuống).
+
+    **Định tuyến theo tiền tố tên service.** Đường trong hợp đồng giữ nguyên; gateway bỏ tiền tố rồi chuyển: `/identity/v1/me` →
+    `http://identity:8080/v1/me`. Có tiền tố vì vài đường **trùng nhau giữa các service** (`/v1/me/privacy` ở identity và social;
+    `/v1/admin/audit-log` ở identity, classroom, commerce, social; `/v1/courses` ở learning và classroom), nên không thể định tuyến `/v1/**` theo
+    đường như PHASE2 viết. Web chỉ đổi biến `*_URL` thành `http://gateway:8080/<service>`.
+    - **Không bao giờ** chuyển: `/<service>/internal/**`, `/<service>/actuator/**`, `/<service>/health`, `/.well-known/**`, mọi đường khác:
+      404 `not_found`. Gateway lấy JWKS của identity qua mạng trong (`http://identity:8080/.well-known/jwks.json`), không mở nó ra ngoài.
+
+    **Token.** Có `Authorization: Bearer` thì gateway kiểm chữ ký RS256 bằng JWKS của identity (đệm 5 phút, `kid` lạ thì đọc lại), `iss` =
+    `pk-kemis-identity`, `exp` (lệch tối đa 60 giây); sai: 401 `token_invalid`. Rồi kiểm **thu hồi** trên Redis (một lệnh `MGET`):
+    `rv:u:<sub>` (token có claim `tv` nhỏ hơn số này) hay `rv:s:<sid>` (phiên bị thu hồi): 401 `token_revoked` (identity.yaml 0.10.0). Không có
+    token thì gateway chuyển tiếp, service tự quyết đường nào cần đăng nhập (`security: []` trong hợp đồng của nó). Service vẫn tự kiểm chữ ký JWT
+    (không tin đầu vào chỉ vì đến từ gateway); gateway **không** thêm header danh tính (`X-User-*`) nào.
+
+    **Header.** Gateway xóa khỏi mọi yêu cầu đến: `X-Bff-Key` (sau khi kiểm), `X-Internal-Key`, `X-User-Id`, `X-User-Role`, `Forwarded`, và với
+    yêu cầu không có khóa BFF thì cả `X-Forwarded-*` (rồi tự đặt `X-Forwarded-For` bằng địa chỉ socket). Yêu cầu có khóa BFF giữ nguyên
+    `X-Forwarded-For` web đã đặt (địa chỉ thật của khách; identity chặn dò mật khẩu theo đó). Mọi yêu cầu có `X-Request-Id` (giữ của web nếu
+    đúng dạng, không thì gateway sinh UUID), trả lại trong phản hồi và ghi log. Log không có `Authorization`, cookie, chuỗi truy vấn của URL ảnh.
+
+    **Giới hạn tần suất** (Redis, `RequestRateLimiter` kiểu thùng token; số mặc định, đổi bằng biến; stack kiểm thử nới ra): người đã đăng nhập
+    theo `sub` (15 yêu cầu/giây, dồn tối đa 120); chưa đăng nhập theo địa chỉ khách (5/giây, dồn 30), riêng `/identity/v1/auth/**` (1/giây,
+    dồn 20); `/realtime/` theo địa chỉ khách (1 lần bắt tay/giây, dồn 20); ảnh theo địa chỉ khách (10/giây, dồn 60). Quá: 429 `too_many_requests`
+    kèm `Retry-After`. Giới hạn theo nghiệp vụ (lời mời mỗi ngày, tin nhắn mỗi phút…) vẫn ở service.
+
+    **Redis không trả lời:** giới hạn tần suất cho qua; kiểm thu hồi cho qua (token vẫn được kiểm chữ ký và hạn, như trước M13) và ghi log lỗi,
+    `/actuator/health` báo `redis: DOWN` (câu hỏi 14 của M13-GATEWAY-MESSAGING.md: cho qua hay chặn).
+
+    **Kích thước, thời gian:** thân yêu cầu API tối đa 1 MB (riêng `/learning/v1/admin/**` 16 MB), ảnh 5 MB; quá: 413 `payload_too_large`. Chờ
+    service tối đa 20 giây (504 `gateway_timeout`); service không nối được: 503 `service_unavailable`.
+
+    Mọi lỗi **của gateway** theo RFC 9457 (`application/problem+json`), cùng dạng với các service, `detail` tiếng Việt. Lỗi của service chuyển
+    nguyên. Chỉ thêm, không xóa hay đổi nghĩa (README của contracts).
+servers:
+  - url: http://gateway:8080
+    description: |
+      Trong mạng Compose (web gọi API). Cùng cổng được publish ra máy ở `GATEWAY_PORT` (mặc định 3001, địa chỉ `GATEWAY_PUBLIC_URL`) cho trình
+      duyệt: chỉ `/realtime/` và URL ảnh. Khi lên AWS là cùng tên miền với web, bộ cân bằng tải chia theo đường.
+security:
+  - bffKey: []
+    bearerAuth: []
+  - bffKey: []
+tags:
+  - name: api
+    description: API của các service, chỉ web gọi (kèm `X-Bff-Key`)
+  - name: realtime
+    description: Kết nối thời gian thực của trình duyệt (Socket.IO qua WebSocket)
+  - name: media
+    description: URL ký sẵn của kho ảnh (S3), trình duyệt tải lên và xem
+
+x-routes:
+  - { prefix: /identity/v1/, target: "http://identity:8080/v1/", caller: web, contract: openapi/identity.yaml }
+  - { prefix: /learning/v1/, target: "http://learning:8080/v1/", caller: web, contract: openapi/learning.yaml }
+  - { prefix: /classroom/v1/, target: "http://classroom:8080/v1/", caller: web, contract: openapi/classroom.yaml }
+  - { prefix: /commerce/v1/, target: "http://commerce:8080/v1/", caller: web, contract: openapi/commerce.yaml }
+  - { prefix: /social/v1/, target: "http://social:8080/v1/", caller: web, contract: openapi/social.yaml }
+  - { prefix: /realtime/, target: "ws://social:8080/realtime/", caller: browser, contract: asyncapi/realtime.yaml }
+  - { prefix: /pk-community-incoming/u/, target: "http://garage:3900/pk-community-incoming/u/", caller: browser, methods: [PUT, OPTIONS] }
+  - { prefix: /pk-community-media/m/, target: "http://garage:3900/pk-community-media/m/", caller: browser, methods: [GET, HEAD, OPTIONS] }
+  - { prefix: /pk-message-media/m/, target: "http://garage:3900/pk-message-media/m/", caller: browser, methods: [GET, HEAD, OPTIONS] }
+
+paths:
+  /{service}/v1/{operationPath}:
+    parameters:
+      - name: service
+        in: path
+        required: true
+        description: Tên service; gateway bỏ đoạn này rồi chuyển phần còn lại (`/v1/...`) tới service đó.
+        schema: { type: string, enum: [identity, learning, classroom, commerce, social] }
+      - name: operationPath
+        in: path
+        required: true
+        description: Phần còn lại của một đường trong hợp đồng của service (có thể nhiều đoạn, có `/`), kèm chuỗi truy vấn như service nhận.
+        schema: { type: string, maxLength: 2000 }
+      - { $ref: "#/components/parameters/BffKey" }
+      - { $ref: "#/components/parameters/RequestId" }
+      - { $ref: "#/components/parameters/ForwardedFor" }
+    get:
+      tags: [api]
+      operationId: proxyGet
+      x-slice: 13a
+      summary: Chuyển một yêu cầu GET tới service
+      responses:
+        "200": { $ref: "#/components/responses/Passthrough" }
+        "401": { $ref: "#/components/responses/TokenRejected" }
+        "404": { $ref: "#/components/responses/NoRoute" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+        "504": { $ref: "#/components/responses/GatewayTimeout" }
+    post:
+      tags: [api]
+      operationId: proxyPost
+      x-slice: 13a
+      summary: Chuyển một yêu cầu POST tới service
+      requestBody: { $ref: "#/components/requestBodies/Passthrough" }
+      responses:
+        "200": { $ref: "#/components/responses/Passthrough" }
+        "401": { $ref: "#/components/responses/TokenRejected" }
+        "404": { $ref: "#/components/responses/NoRoute" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+        "504": { $ref: "#/components/responses/GatewayTimeout" }
+    put:
+      tags: [api]
+      operationId: proxyPut
+      x-slice: 13a
+      summary: Chuyển một yêu cầu PUT tới service
+      requestBody: { $ref: "#/components/requestBodies/Passthrough" }
+      responses:
+        "200": { $ref: "#/components/responses/Passthrough" }
+        "401": { $ref: "#/components/responses/TokenRejected" }
+        "404": { $ref: "#/components/responses/NoRoute" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+        "504": { $ref: "#/components/responses/GatewayTimeout" }
+    patch:
+      tags: [api]
+      operationId: proxyPatch
+      x-slice: 13a
+      summary: Chuyển một yêu cầu PATCH tới service
+      requestBody: { $ref: "#/components/requestBodies/Passthrough" }
+      responses:
+        "200": { $ref: "#/components/responses/Passthrough" }
+        "401": { $ref: "#/components/responses/TokenRejected" }
+        "404": { $ref: "#/components/responses/NoRoute" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+        "504": { $ref: "#/components/responses/GatewayTimeout" }
+    delete:
+      tags: [api]
+      operationId: proxyDelete
+      x-slice: 13a
+      summary: Chuyển một yêu cầu DELETE tới service
+      responses:
+        "200": { $ref: "#/components/responses/Passthrough" }
+        "401": { $ref: "#/components/responses/TokenRejected" }
+        "404": { $ref: "#/components/responses/NoRoute" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+        "504": { $ref: "#/components/responses/GatewayTimeout" }
+
+  /pk-community-incoming/u/{mediaId}:
+    put:
+      tags: [media]
+      operationId: uploadToStore
+      x-slice: 13a
+      summary: Tải một ảnh lên khu nhận của kho bằng URL ký sẵn
+      description: |
+        Chỉ để URL `PUT` ký sẵn mà social cấp (social.yaml `requestUpload`, `requestMessageUpload`; máy chủ trong URL là `S3_PUBLIC_ENDPOINT` =
+        cổng công khai của gateway) tới được kho. Gateway chuyển nguyên tới kho S3 (Garage ở máy này), **giữ nguyên `Host`** và đường (chữ ký
+        SigV4 tính trên cả hai), không đọc thân. Chỉ `PUT` và `OPTIONS` (CORS do kho trả); thân tối đa 5 MB. Kho kiểm chữ ký, hạn, `Content-Type`,
+        `Content-Length`.
+      security: []
+      parameters:
+        - name: mediaId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          image/jpeg: { schema: { type: string, format: binary } }
+          image/png: { schema: { type: string, format: binary } }
+          image/webp: { schema: { type: string, format: binary } }
+      responses:
+        "200": { description: Kho đã nhận tệp }
+        "403": { description: "Chữ ký sai, hết hạn, header không khớp (lỗi XML của kho, chuyển nguyên)" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
+  /pk-community-media/m/{mediaId}/{file}:
+    get:
+      tags: [media]
+      operationId: readCommunityImage
+      x-slice: 13a
+      summary: Đọc một ảnh Cộng đồng bằng URL ký sẵn
+      description: Như `uploadToStore` nhưng chỉ `GET`, `HEAD`, `OPTIONS`. URL do social ký (1 giờ), chỉ cho người được xem ảnh đó.
+      security: []
+      parameters:
+        - { $ref: "#/components/parameters/MediaId" }
+        - { $ref: "#/components/parameters/MediaFile" }
+      responses:
+        "200":
+          description: Ảnh WebP
+          content:
+            image/webp: { schema: { type: string, format: binary } }
+        "403": { description: "Chữ ký sai hay hết hạn (lỗi XML của kho, chuyển nguyên)" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+
+  /pk-message-media/m/{mediaId}/{file}:
+    get:
+      tags: [media]
+      operationId: readMessageImage
+      x-slice: 13a
+      summary: Đọc một ảnh của tin nhắn bằng URL ký sẵn
+      description: Như `readCommunityImage`, bucket của tin nhắn (social.yaml 0.3.0). URL chỉ ký cho thành viên đọc được tin đó.
+      security: []
+      parameters:
+        - { $ref: "#/components/parameters/MediaId" }
+        - { $ref: "#/components/parameters/MediaFile" }
+      responses:
+        "200":
+          description: Ảnh WebP
+          content:
+            image/webp: { schema: { type: string, format: binary } }
+        "403": { description: "Chữ ký sai hay hết hạn (lỗi XML của kho, chuyển nguyên)" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+
+components:
+  securitySchemes:
+    bffKey:
+      type: apiKey
+      in: header
+      name: X-Bff-Key
+      description: |
+        Bí mật chung giữa web và gateway (`GATEWAY_BFF_KEY`, do `scripts/env-secrets.sh` của platform sinh). Chỉ server của web giữ; trình duyệt
+        không bao giờ thấy. So sánh thời gian hằng. Thiếu hay sai: 404 `not_found` (không phải 401, để người ngoài không biết có API ở đây).
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Access token của identity (identity.yaml), gateway kiểm chữ ký, hạn và thu hồi; service kiểm lại chữ ký.
+
+  parameters:
+    BffKey:
+      name: X-Bff-Key
+      in: header
+      required: true
+      schema: { type: string, minLength: 32, maxLength: 128 }
+    RequestId:
+      name: X-Request-Id
+      in: header
+      required: false
+      description: Mã yêu cầu của web (để nối log). Không đúng dạng thì gateway thay bằng UUID mới.
+      schema: { type: string, pattern: "^[A-Za-z0-9_-]{8,64}$" }
+    ForwardedFor:
+      name: X-Forwarded-For
+      in: header
+      required: false
+      description: Địa chỉ thật của khách do web đặt (một địa chỉ). Chỉ được tin khi có khóa BFF; gateway nối thêm địa chỉ của web phía sau.
+      schema: { type: string, maxLength: 200 }
+    MediaId:
+      name: mediaId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    MediaFile:
+      name: file
+      in: path
+      required: true
+      schema: { type: string, enum: [full.webp, thumb.webp] }
+
+  requestBodies:
+    Passthrough:
+      required: false
+      description: Thân như hợp đồng của service quy định; gateway chuyển nguyên (tối đa 1 MB, `/learning/v1/admin/**` 16 MB).
+      content:
+        application/json:
+          schema: {}
+
+  headers:
+    RequestId:
+      description: Mã yêu cầu (của web, hay do gateway sinh).
+      schema: { type: string }
+    RetryAfter:
+      description: Số giây nên chờ trước khi thử lại.
+      schema: { type: integer, minimum: 1 }
+
+  responses:
+    Passthrough:
+      description: Phản hồi của service, chuyển nguyên (mã trạng thái, header, thân), thêm `X-Request-Id`.
+      headers:
+        X-Request-Id: { $ref: "#/components/headers/RequestId" }
+    TokenRejected:
+      description: |
+        Token không dùng được: chữ ký, `iss`, hạn sai (`token_invalid`); hay đã bị thu hồi (`token_revoked`: tài khoản bị khóa, đổi vai trò, đăng
+        xuất…). Với `token_revoked` web làm mới token một lần (refresh token còn sống thì phiên tiếp tục, ví dụ sau khi đổi vai trò); làm mới hỏng
+        thì người dùng đã bị đăng xuất. Service sau gateway cũng có thể trả 401 `token_invalid` của nó (chuyển nguyên).
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+          examples:
+            thuHoi:
+              value: { type: about:blank, title: Unauthorized, status: 401, code: token_revoked, detail: "Phiên đăng nhập đã kết thúc. Hãy đăng nhập lại." }
+    NoRoute:
+      description: Không có đường này với người gọi (`not_found`). Cả khi thiếu hay sai `X-Bff-Key`, và mọi `/internal/**`, `/actuator/**`.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    TooManyRequests:
+      description: Quá giới hạn tần suất của gateway (`too_many_requests`); chờ theo `Retry-After`
+      headers:
+        Retry-After: { $ref: "#/components/headers/RetryAfter" }
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    PayloadTooLarge:
+      description: Thân yêu cầu quá lớn (`payload_too_large`)
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    BadGateway:
+      description: Service trả phản hồi hỏng (`bad_gateway`)
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    ServiceUnavailable:
+      description: Không nối được service (`service_unavailable`); web hiện "Chưa tải được" như khi service tắt trước M13
+      headers:
+        Retry-After: { $ref: "#/components/headers/RetryAfter" }
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    GatewayTimeout:
+      description: Service không trả lời trong 20 giây (`gateway_timeout`)
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+
+  schemas:
+    Problem:
+      type: object
+      description: Lỗi của chính gateway theo RFC 9457, cùng dạng với các service.
+      required: [title, status, code]
+      properties:
+        type: { type: string, default: about:blank }
+        title: { type: string }
+        status: { type: integer }
+        code:
+          type: string
+          enum:
+            - not_found
+            - token_invalid
+            - token_revoked
+            - too_many_requests
+            - payload_too_large
+            - origin_forbidden
+            - bad_gateway
+            - service_unavailable
+            - gateway_timeout
+        detail: { type: string, description: "Thông báo tiếng Việt, hiển thị được cho người dùng." }

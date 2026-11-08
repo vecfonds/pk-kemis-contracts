@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
   title: PkKemis social
-  version: 0.2.1
-  summary: Bạn bè, lời mời, chặn, quyền riêng tư của trang cá nhân, trang cá nhân người khác, bảng xếp hạng bạn bè, thông báo, Cộng đồng, kiểm duyệt, ảnh.
+  version: 0.3.0
+  summary: Bạn bè, lời mời, chặn, quyền riêng tư của trang cá nhân, trang cá nhân người khác, bảng xếp hạng bạn bè, thông báo, Cộng đồng, kiểm duyệt, ảnh, tin nhắn, vé kết nối thời gian thực.
   description: |
     0.1.0 (docs/backend/M10-SOCIAL.md): service mới, NestJS. Phần 1 của social (PHASE2 M10): bạn bè, cổ vũ, chặn, quyền riêng tư của trang
     cá nhân, trang cá nhân người khác (đã lọc theo quyền ở máy chủ), bảng xếp hạng bạn bè, "Bạn bè gần đây", thông báo trong app (hỏi lại
@@ -33,6 +33,23 @@ info:
     - Báo cáo của người từng bị admin bỏ qua báo cáo về cùng nội dung không đếm cho tự ẩn; nội dung hiện lại (`restore`, bỏ qua báo cáo,
       chấp nhận kháng nghị) mà còn bị một kiểm giữ chưa được duyệt thì về hàng chờ duyệt, không thông báo `community_restored`.
     - learning không trả lời lúc đăng thì bài không giữ mã khóa, chương, bài, câu (`refs` trống).
+
+    0.3.0 (docs/backend/M13-GATEWAY-MESSAGING.md, chỉ thêm): phần 3 của social (PHASE2 M13).
+    - **Tin nhắn** (lát `13e`): trò chuyện 1-1 và nhóm (3–30 người), tin chữ (tối đa 2 000 kí tự) và ảnh (tối đa 6 mỗi tin, hiện ngay, không
+      chờ duyệt; vẫn kiểm loại thật, nén lại, xóa EXIF như ảnh Cộng đồng), dòng hệ thống của nhóm là **mã** (`SystemEvent`), số thứ tự `seq`
+      tăng dần trong mỗi cuộc trò chuyện (sắp xếp, chống trùng, đọc bù sau khi mất kết nối), đánh dấu đã đọc, số chưa đọc, danh bạ để chọn
+      người. Ai nhắn được ai theo `messagesFrom` (lưu từ M10, áp dụng từ bản này), chặn, lớp học (học sinh luôn nhắn được giáo viên của lớp
+      mình), admin luôn nhắn được và luôn nhận được. **Chặn không lộ:** người bị chặn nhận `messages_closed`, cùng mã với "người này không nhận
+      tin nhắn của bạn". Giữ quyết định 10 của docs/community/PLAN.md: tin nhắn không qua bộ lọc, không báo cáo, admin không đọc được cuộc trò
+      chuyện của người khác.
+    - **Vé kết nối thời gian thực** (lát `13d`): `POST /v1/realtime/tickets`. Trình duyệt không giữ token: web (BFF) xin vé bằng token của người
+      dùng rồi đưa cho trình duyệt; trình duyệt mở Socket.IO qua cổng công khai của gateway (`/realtime`) và gửi vé trong gói CONNECT. Sự kiện
+      đẩy xuống (thông báo, tin nhắn, đã đọc ở tab khác, phiên kết thúc) ghi ở `asyncapi/realtime.yaml` 0.1.0.
+    - Thêm: `Summary.unreadMessages`, `ProfileView.messageBlock`, thông báo `message_group_added`, mã lỗi `messages_closed`, `not_owner`,
+      `not_group`, `group_full`, `realtime_unavailable`, `limitKind` cho tin nhắn.
+    - Từ M13 web gọi social **qua gateway** (`http://gateway:8080/social` + đường của hợp đồng này, kèm `X-Bff-Key`; `openapi/gateway.yaml`
+      0.1.0). Đường không đổi; gateway thêm tiền tố tên service vì vài đường trùng nhau giữa các service (`/v1/me/privacy`,
+      `/v1/admin/audit-log`). Giới hạn tần suất theo người, theo IP ở gateway (Redis); các giới hạn theo nghiệp vụ vẫn ở đây.
 
     - **Cộng đồng chỉ dùng mã hồ sơ.** Tác giả, người báo cáo, người được xử lý đều là `Person` (`handle`), như phần bạn bè. Mã tài khoản
       thật của người khác không có trong bất kì phản hồi Cộng đồng nào cho học sinh, giáo viên; đường admin chỉ trả thêm `userId` ở
@@ -70,6 +87,8 @@ info:
 servers:
   - url: http://social:8080
     description: Mạng Docker Compose (chưa có gateway)
+  - url: http://gateway:8080/social
+    description: "0.3.0 (M13, lát 13c): web gọi qua gateway, kèm header `X-Bff-Key` (openapi/gateway.yaml)"
 security:
   - bearerAuth: []
 tags:
@@ -93,6 +112,10 @@ tags:
     description: Ảnh của Cộng đồng (0.2.0, M12) — xin chỗ tải lên, hoàn tất, bỏ
   - name: moderation
     description: Kiểm duyệt Cộng đồng (0.2.0, M12, admin) — hàng chờ, xử lý, kháng nghị, từ khóa, nhật ký
+  - name: messaging
+    description: Tin nhắn (0.3.0, M13) — cuộc trò chuyện 1-1 và nhóm, tin, ảnh, đã đọc, danh bạ
+  - name: realtime
+    description: Vé mở kết nối thời gian thực (0.3.0, M13)
 
 paths:
   # ------------------------------------------------------------------ 10b: tóm tắt và quyền riêng tư
@@ -163,6 +186,10 @@ paths:
         Chỉ các trường gửi lên mới đổi; `version` tăng 1 khi có đổi thật. Có hiệu lực ngay ở mọi phản hồi sau đó (social đọc quyền lúc trả lời,
         không đệm). `messagesFrom`, `repliesFrom` được lưu từ bây giờ nhưng chỉ áp dụng khi có tin nhắn (M13) và Cộng đồng (M12) ở máy chủ.
         Giáo viên, admin lưu được mọi trường; chỉ `messagesFrom`, `repliesFrom` có nghĩa với họ.
+
+        0.3.0 (M13, lát `13e`): `messagesFrom` áp dụng cho việc bắt đầu cuộc trò chuyện 1-1, **mỗi tin** gửi trong cuộc trò chuyện 1-1 (đổi sang
+        `friends` hay `nobody` thì người lạ không gửi tiếp được, kể cả trong cuộc trò chuyện cũ) và việc bị thêm vào nhóm. Không áp cho tin trong
+        nhóm mình đang ở (rời nhóm là cách thôi nhận).
       requestBody:
         required: true
         content:
@@ -764,6 +791,10 @@ paths:
       description: |
         Đường nhẹ cho chuông và số trên mục Trang cá nhân ở menu: web hỏi lại mỗi 60 giây khi tab đang mở (PHASE2 câu 13; đẩy thời gian thực ở
         M13). `ETag` đổi khi một trong hai số đổi hoặc có thông báo mới; gửi `If-None-Match` đúng thì nhận 304 không có thân.
+
+        0.3.0 (M13): thêm `unreadMessages` (số tin chưa đọc của mọi cuộc trò chuyện, cho số trên mục Tin nhắn); `ETag` đổi cả khi số này đổi.
+        Khi kết nối thời gian thực đang mở, social đẩy cùng các số này bằng sự kiện `notification.changed` (asyncapi/realtime.yaml) và web chỉ
+        hỏi lại đường này khi mất kết nối (dự phòng) hay sau khi kết nối lại.
       parameters:
         - { $ref: "#/components/parameters/IfNoneMatch" }
       responses:
@@ -2399,6 +2430,677 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
 
+  # ------------------------------------------------------------------ 13d: vé kết nối thời gian thực (0.3.0, M13)
+
+  /v1/realtime/tickets:
+    post:
+      tags: [realtime]
+      operationId: createRealtimeTicket
+      x-slice: 13d
+      summary: Xin vé mở kết nối thời gian thực (mọi vai trò; web xin thay cho trình duyệt)
+      description: |
+        Trình duyệt không giữ access token (cookie httpOnly của web), nên web (server action) gọi đường này bằng token của người dùng rồi chỉ đưa
+        **vé** cho trình duyệt. Trình duyệt mở Socket.IO tới cổng công khai của gateway (`path` = `/realtime`, chỉ `websocket`, không long-polling)
+        và gửi vé trong gói CONNECT (`auth: { ticket }`), **không bao giờ** trong URL (URL nằm trong log).
+        - Vé là 32 byte ngẫu nhiên (base64url), **dùng một lần**, sống 60 giây; social giữ mã băm SHA-256 của vé trong Redis (`rt:<băm>`) kèm người,
+          phiên (`sid`), phiên bản token (`tv`) và vai trò lấy từ token; đổi vé lấy kết nối là `GETDEL` (hai kết nối không dùng được cùng một vé).
+        - Lúc đổi vé social kiểm lại: tài khoản không bị khóa (bản sao `members`), token chưa bị thu hồi (khóa `rv:*` của Redis, M13-GATEWAY-MESSAGING.md
+          mục 6). Sai thì kết nối bị từ chối (`connect_error` với `data.code` = `ticket_invalid` hay `session_ended`).
+        - Kết nối sống tối đa `maxAgeSeconds` (mặc định 3600): hết thì social gửi `session.ended` (lý do `expired`) và đóng; trình duyệt xin vé mới
+          qua web và nối lại (web cũng thấy phiên còn sống hay không). Mỗi người tối đa 10 kết nối; kết nối thứ 11 làm kết nối cũ nhất bị đóng
+          (`replaced`).
+        - Tối đa 30 vé mỗi phút mỗi người (429). social chưa có Redis (`REDIS_URL` trống): 503 `realtime_unavailable`; web giữ cách hỏi lại định kỳ
+          như M10.
+        Sự kiện đi xuống qua kết nối này: asyncapi/realtime.yaml 0.1.0. Kết nối chỉ để **đẩy xuống**; mọi thao tác ghi (gửi tin, đánh dấu đã đọc…)
+        đi HTTP qua web, như mọi đường khác.
+      responses:
+        "201":
+          description: Vé dùng một lần
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RealtimeTicket" }
+              example:
+                ticket: Qm9yZWQtdGlja2V0LWZvci1Qa0tlbWlzLWV4YW1wbGU
+                expiresAt: "2026-11-09T12:01:00.000Z"
+                path: /realtime
+                maxAgeSeconds: 3600
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403":
+          description: Tài khoản bị khóa (`account_locked`)
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "503":
+          description: social chưa có Redis nên chưa mở kết nối thời gian thực được (`realtime_unavailable`)
+          headers:
+            Retry-After: { $ref: "#/components/headers/RetryAfter" }
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  # ------------------------------------------------------------------ 13e: tin nhắn (0.3.0, M13)
+
+  /v1/conversations:
+    get:
+      tags: [messaging]
+      operationId: listConversations
+      x-slice: 13e
+      summary: Hộp thư của mình, cuộc trò chuyện mới hoạt động trước (mọi vai trò)
+      description: |
+        Các cuộc trò chuyện mình đang ở (nhóm đã rời hay bị mời ra không còn ở đây). Cuộc 1-1 chỉ hiện với người kia khi đã có ít nhất một tin
+        (người mở cuộc trống vẫn thấy nó). Xếp theo `lastActivityAt` giảm dần, rồi `id`; con trỏ theo cặp đó. `unread` của từng cuộc và
+        `unreadMessages` (tổng) đếm tin chữ của **người khác**, không đếm dòng hệ thống, tin của chính mình, tin của người mình đã chặn; mỗi cuộc
+        tối đa 99 (web ghi "99+").
+      parameters:
+        - { $ref: "#/components/parameters/Cursor" }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 50, default: 30 }
+      responses:
+        "200":
+          description: Một trang của hộp thư
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConversationPage" }
+              example:
+                unreadMessages: 3
+                nextCursor: null
+                items:
+                  - id: 0f1e2d3c-4b5a-4697-8a8b-9c0d1e2f3a4b
+                    kind: group
+                    title: Nhóm ôn chương 4
+                    other: null
+                    memberCount: 4
+                    lastSeq: 12
+                    lastActivityAt: "2026-11-09T12:40:00.000Z"
+                    unread: 2
+                    lastMessage:
+                      seq: 12
+                      kind: text
+                      author: { handle: b4c8d2e6f0a1, fullName: Lê Bảo Ngọc, avatarInitials: BN, avatarUrl: null, frameId: null, role: student, level: 8, joinedOn: "2026-08-30" }
+                      mine: false
+                      text: Ai làm xong câu 5 chưa?
+                      imageCount: 0
+                      system: null
+                      blockedAuthor: false
+                      createdAt: "2026-11-09T12:40:00.000Z"
+                  - id: 1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d
+                    kind: direct
+                    title: null
+                    other: { handle: t9h5c2j7m1q8, fullName: Trần Thu Hà, avatarInitials: TH, avatarUrl: null, frameId: null, role: teacher, level: null, joinedOn: "2026-08-01" }
+                    memberCount: 2
+                    lastSeq: 3
+                    lastActivityAt: "2026-11-09T09:05:00.000Z"
+                    unread: 1
+                    lastMessage:
+                      seq: 3
+                      kind: text
+                      author: { handle: t9h5c2j7m1q8, fullName: Trần Thu Hà, avatarInitials: TH, avatarUrl: null, frameId: null, role: teacher, level: null, joinedOn: "2026-08-01" }
+                      mine: false
+                      text: null
+                      imageCount: 1
+                      system: null
+                      blockedAuthor: false
+                      createdAt: "2026-11-09T09:05:00.000Z"
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      tags: [messaging]
+      operationId: createConversation
+      x-slice: 13e
+      summary: Mở cuộc trò chuyện 1-1 (trả cuộc cũ nếu đã có) hay lập nhóm
+      description: |
+        - **1-1** (`kind: direct`, `handle`): mỗi cặp người một cuộc duy nhất. Đã có thì trả nó (200), kể cả khi giờ mình không gửi được nữa
+          (đọc lại được lịch sử; `sendBlock` cho biết). Chưa có thì chỉ tạo khi mình nhắn được cho người đó (luật ở `MessageBlock`), 201.
+          Cuộc mới chưa có tin thì người kia chưa thấy trong hộp thư.
+        - **Nhóm** (`kind: group`, `title` 3–50 kí tự, `handles` 2–29 người khác): mình là trưởng nhóm; tổng 3–30 người. Mỗi người được thêm phải
+          nhắn được từ mình (như 1-1; "ai được nhắn tin cho tôi" gồm cả việc thêm vào nhóm, docs/community/PLAN.md mục 6.1). Có người không thêm
+          được thì **không tạo gì**: 403 `messages_closed` (hay `you_blocked`) kèm `handles` là những người đó (danh bạ đã cho biết trước bằng
+          `messageBlock`, nên không lộ thêm gì; người đã chặn mình cũng là `messages_closed`). Dòng hệ thống `group_created`; mỗi người được thêm
+          nhận thông báo `message_group_added`. `Idempotency-Key` (tùy chọn) để bấm đúp không lập hai nhóm.
+        - Không nhắn cho chính mình (403 `self`). Mã hồ sơ không có, hay người đó bị khóa: 404 (như M10). Tài khoản mình bị khóa: 403 `account_locked`.
+        - Lượt trong ngày (giờ Việt Nam): cuộc 1-1 **mới** 20 (tài khoản dưới 7 ngày 5), nhóm mới 10 (409 `daily_limit`, `limitKind`
+          `conversations` hay `groups`); admin không giới hạn.
+      parameters:
+        - { $ref: "#/components/parameters/OptionalIdempotencyKey" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NewConversation" }
+            examples:
+              motMot:
+                summary: Nhắn cho giáo viên của lớp mình
+                value: { kind: direct, handle: t9h5c2j7m1q8 }
+              nhom:
+                summary: Lập nhóm ôn tập
+                value: { kind: group, title: Nhóm ôn chương 5, handles: [b4c8d2e6f0a1, p3n8w1v6rz0c] }
+      responses:
+        "200":
+          description: Cuộc 1-1 đã có
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConversationDetail" }
+        "201":
+          description: Đã tạo
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConversationDetail" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403":
+          description: "`messages_closed`, `you_blocked` (kèm `handles` khi lập nhóm), `self`, `account_locked`"
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "`daily_limit` (`limitKind`: `conversations`, `groups`)"
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422":
+          description: Cùng `Idempotency-Key` nhưng thân khác (`idempotency_mismatch`)
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+
+  /v1/conversations/{conversationId}:
+    get:
+      tags: [messaging]
+      operationId: getConversation
+      x-slice: 13e
+      summary: Một cuộc trò chuyện của mình (thành viên, trưởng nhóm, mình gửi được không)
+      description: |
+        Không phải thành viên (chưa bao giờ, đã rời, bị mời ra) thì 404, giống hệt mã không có. Admin cũng không đọc được cuộc trò chuyện của
+        người khác (docs/community/PLAN.md quyết định 10). `sendBlock` cho biết trước vì sao mình chưa gửi được (cuộc 1-1).
+      parameters:
+        - { $ref: "#/components/parameters/ConversationId" }
+      responses:
+        "200":
+          description: Cuộc trò chuyện
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConversationDetail" }
+              example:
+                id: 0f1e2d3c-4b5a-4697-8a8b-9c0d1e2f3a4b
+                kind: group
+                title: Nhóm ôn chương 4
+                owner: b4c8d2e6f0a1
+                isOwner: false
+                memberCount: 3
+                maxMembers: 30
+                lastSeq: 12
+                joinedSeq: 0
+                lastReadSeq: 10
+                unread: 2
+                sendBlock: null
+                createdAt: "2026-11-01T13:10:00.000Z"
+                members:
+                  - person: { handle: b4c8d2e6f0a1, fullName: Lê Bảo Ngọc, avatarInitials: BN, avatarUrl: null, frameId: null, role: student, level: 8, joinedOn: "2026-08-30" }
+                    isOwner: true
+                    joinedAt: "2026-11-01T13:10:00.000Z"
+                  - person: { handle: k7m2q9x4ta3b, fullName: Nguyễn Minh Anh, avatarInitials: MA, avatarUrl: null, frameId: meo-con-day-leo, role: student, level: 7, joinedOn: "2026-09-01" }
+                    isOwner: false
+                    joinedAt: "2026-11-01T13:10:00.000Z"
+                  - person: { handle: p3n8w1v6rz0c, fullName: Đỗ Thanh Tâm, avatarInitials: TT, avatarUrl: null, frameId: null, role: student, level: 5, joinedOn: "2026-09-03" }
+                    isOwner: false
+                    joinedAt: "2026-11-02T08:00:00.000Z"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [messaging]
+      operationId: renameGroup
+      x-slice: 13e
+      summary: Đổi tên nhóm (trưởng nhóm)
+      description: |
+        Tên 3–50 kí tự. Chỉ trưởng nhóm (403 `not_owner`); cuộc 1-1 không có tên (409 `not_group`). Tên không đổi thì 200, không ghi dòng hệ thống.
+        Đổi thật thì thêm dòng hệ thống `group_renamed`. Lặp được.
+      parameters:
+        - { $ref: "#/components/parameters/ConversationId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [title]
+              properties:
+                title: { type: string, minLength: 3, maxLength: 50 }
+      responses:
+        "200":
+          description: Cuộc trò chuyện sau khi đổi
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConversationDetail" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403":
+          description: "`not_owner`, `account_locked`"
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "`not_group`"
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /v1/conversations/{conversationId}/members:
+    post:
+      tags: [messaging]
+      operationId: addGroupMembers
+      x-slice: 13e
+      summary: Thêm người vào nhóm (mọi thành viên)
+      description: |
+        Như bản thử: mọi thành viên thêm được người (chỉ trưởng nhóm đổi tên và mời ra). Mỗi người được thêm phải nhắn được từ người thêm (luật của
+        `MessageBlock`); có người không thêm được thì không thêm ai: 403 `messages_closed` / `you_blocked` kèm `handles`. Người đã ở nhóm bị bỏ
+        qua. Vượt 30 người: 409 `group_full`. Người được thêm chỉ đọc được tin **từ lúc vào** (`joinedSeq`), không đọc lịch sử trước đó
+        (M13-GATEWAY-MESSAGING.md mục 8.3, câu hỏi 6). Dòng hệ thống `members_added`; thông báo `message_group_added` cho từng người.
+      parameters:
+        - { $ref: "#/components/parameters/ConversationId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [handles]
+              properties:
+                handles:
+                  type: array
+                  minItems: 1
+                  maxItems: 28
+                  uniqueItems: true
+                  items: { $ref: "#/components/schemas/Handle" }
+      responses:
+        "200":
+          description: Cuộc trò chuyện sau khi thêm
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConversationDetail" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403":
+          description: "`messages_closed`, `you_blocked` (kèm `handles`), `account_locked`"
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "`not_group`, `group_full`"
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+
+  /v1/conversations/{conversationId}/members/{handle}:
+    delete:
+      tags: [messaging]
+      operationId: removeGroupMember
+      x-slice: 13e
+      summary: Mời một người ra khỏi nhóm (trưởng nhóm)
+      description: |
+        Chỉ trưởng nhóm (403 `not_owner`); không mời chính mình ra (400; dùng `leave`). Người bị mời ra mất quyền đọc cả cuộc trò chuyện (404 từ
+        đó), nhận sự kiện `conversation.removed` (lý do `removed`); dòng hệ thống `member_removed`. Người không còn ở nhóm: 200, không đổi gì.
+      parameters:
+        - { $ref: "#/components/parameters/ConversationId" }
+        - { $ref: "#/components/parameters/Handle" }
+      responses:
+        "200":
+          description: Cuộc trò chuyện sau khi mời ra
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConversationDetail" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403":
+          description: "`not_owner`, `account_locked`"
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "`not_group`"
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /v1/conversations/{conversationId}/leave:
+    post:
+      tags: [messaging]
+      operationId: leaveGroup
+      x-slice: 13e
+      summary: Rời nhóm
+      description: |
+        Mất quyền đọc cả cuộc trò chuyện (404 từ đó). Trưởng nhóm rời thì người vào nhóm sớm nhất còn lại thành trưởng nhóm (dòng hệ thống
+        `owner_changed` sau `member_left`), như bản thử. Người cuối cùng rời thì cuộc trò chuyện không còn ai; social xóa hẳn sau 30 ngày. Cuộc
+        1-1 không rời được (409 `not_group`). Tài khoản bị khóa vẫn rời được (để thôi ở nhóm).
+      parameters:
+        - { $ref: "#/components/parameters/ConversationId" }
+      responses:
+        "204": { description: Đã rời }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "`not_group`"
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /v1/conversations/{conversationId}/messages:
+    get:
+      tags: [messaging]
+      operationId: listMessages
+      x-slice: 13e
+      summary: Tin của một cuộc trò chuyện, theo `seq` tăng dần
+      description: |
+        - Không tham số: `limit` tin mới nhất. `before=<seq>`: các tin ngay trước `seq` đó (cuộn lên xem cũ). `after=<seq>`: các tin ngay sau
+          (đọc bù sau khi mất kết nối, hay khi sự kiện `message.created` tới với `seq` nhảy cóc). Không gửi cả hai.
+        - Chỉ tin có `seq` > `joinedSeq` của mình (người vào nhóm sau không đọc lịch sử trước đó). Tin của người mình đã chặn: `blockedAuthor: true`,
+          không có chữ, ảnh (web ghi "Tin nhắn từ người bạn đã chặn"). Tin quá hạn giữ (mục 8.8 của M13-GATEWAY-MESSAGING.md): `purged: true`, không
+          chữ, ảnh. URL ảnh ký sẵn 1 giờ, chỉ cho thành viên đọc được tin đó.
+        - Không đánh dấu đã đọc (dùng `POST …/read`).
+      parameters:
+        - { $ref: "#/components/parameters/ConversationId" }
+        - name: before
+          in: query
+          schema: { type: integer, format: int64, minimum: 1 }
+        - name: after
+          in: query
+          schema: { type: integer, format: int64, minimum: 0 }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+      responses:
+        "200":
+          description: Một trang tin
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MessagePage" }
+              example:
+                lastSeq: 12
+                joinedSeq: 0
+                hasMoreBefore: true
+                hasMoreAfter: false
+                items:
+                  - id: 7e8f9a0b-1c2d-4e3f-8a4b-5c6d7e8f9a0b
+                    conversationId: 0f1e2d3c-4b5a-4697-8a8b-9c0d1e2f3a4b
+                    seq: 11
+                    kind: system
+                    author: null
+                    mine: false
+                    body: null
+                    images: []
+                    system:
+                      code: members_added
+                      actor: { handle: b4c8d2e6f0a1, fullName: Lê Bảo Ngọc, avatarInitials: BN, avatarUrl: null, frameId: null, role: student, level: 8, joinedOn: "2026-08-30" }
+                      targets:
+                        - { handle: p3n8w1v6rz0c, fullName: Đỗ Thanh Tâm, avatarInitials: TT, avatarUrl: null, frameId: null, role: student, level: 5, joinedOn: "2026-09-03" }
+                      title: null
+                    blockedAuthor: false
+                    purged: false
+                    createdAt: "2026-11-02T08:00:00.000Z"
+                  - id: 8f9a0b1c-2d3e-4f4a-9b5c-6d7e8f9a0b1c
+                    conversationId: 0f1e2d3c-4b5a-4697-8a8b-9c0d1e2f3a4b
+                    seq: 12
+                    kind: text
+                    author: { handle: b4c8d2e6f0a1, fullName: Lê Bảo Ngọc, avatarInitials: BN, avatarUrl: null, frameId: null, role: student, level: 8, joinedOn: "2026-08-30" }
+                    mine: false
+                    body: Ai làm xong câu 5 chưa? Fe₂O₃ + 3CO → 2Fe + 3CO₂ đúng không?
+                    images: []
+                    system: null
+                    blockedAuthor: false
+                    purged: false
+                    createdAt: "2026-11-09T12:40:00.000Z"
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      tags: [messaging]
+      operationId: sendMessage
+      x-slice: 13e
+      summary: Gửi một tin (chữ, ảnh, hay cả hai)
+      description: |
+        - `Idempotency-Key` **bắt buộc**: web sinh một mã cho mỗi lần bấm Gửi (Enter), gửi lại đúng mã khi thử lại sau lỗi mạng; cùng mã thì trả lại
+          đúng tin đã tạo (201, cùng thân), khác thân thì 422 `idempotency_mismatch`. Mã được giữ mãi trong tin (`clientKey`, chỉ người gửi thấy) để
+          web khớp bong bóng "đang gửi" với tin thật, kể cả khi sự kiện `message.created` tới trước phản hồi này.
+        - Cuộc 1-1: mỗi tin kiểm lại luật của `MessageBlock` (đổi quyền riêng tư hay chặn có hiệu lực ngay): 403 `messages_closed` hay `you_blocked`.
+          Nhóm: mọi thành viên gửi được (tin của người bị một thành viên chặn tới người đó dưới dạng `blockedAuthor`, không lỗi, không lộ).
+        - Chữ 1–2 000 kí tự (giữ nguyên như người gõ, kể cả chỉ số dưới H₂SO₄; **không qua bộ lọc**, quyết định 10) và/hoặc 1–6 ảnh đã `complete`
+          của chính mình trong cùng cuộc trò chuyện (ảnh không dùng được: 409 `media_unavailable`). Không chờ duyệt (quyết định 11).
+        - Social cấp `seq` (tăng 1 trong cuộc trò chuyện) trong giao dịch có khóa dòng cuộc trò chuyện, rồi sau khi ghi xong đẩy `message.created`
+          tới mọi thành viên đang kết nối (cả các tab khác của người gửi).
+        - Lượt: 30 tin mỗi phút (429), 1 000 tin mỗi ngày (tài khoản dưới 7 ngày 300; 409 `daily_limit`, `limitKind: messages`); admin không giới
+          hạn ngày.
+      parameters:
+        - { $ref: "#/components/parameters/ConversationId" }
+        - { $ref: "#/components/parameters/RequiredIdempotencyKey" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NewMessage" }
+            example: { body: "Mình gửi bảng tóm tắt chất khử – chất oxi hóa nè", mediaIds: [6f7a8b9c-0d1e-4f2a-9b3c-4d5e6f7a8b9c] }
+      responses:
+        "201":
+          description: Tin đã tạo (hay tin đã tạo trước đó với cùng `Idempotency-Key`)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Message" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403":
+          description: "`messages_closed`, `you_blocked`, `account_locked`"
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "`daily_limit` (`limitKind: messages`), `media_unavailable`"
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422":
+          description: "`idempotency_mismatch`"
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+
+  /v1/conversations/{conversationId}/read:
+    post:
+      tags: [messaging]
+      operationId: markConversationRead
+      x-slice: 13e
+      summary: Đánh dấu đã đọc tới một tin
+      description: |
+        `lastReadSeq` = lớn hơn trong (cũ, min(`upToSeq`, `lastSeq`)): không bao giờ lùi, nên hai tab gửi lệch thứ tự không làm số chưa đọc tăng lại.
+        Đổi thật thì đẩy `conversation.read` tới các kết nối khác của mình (tab khác thấy số chưa đọc giảm). Người khác **không** biết mình đã đọc
+        (không có "Đã xem", như bản thử; câu hỏi 8).
+      parameters:
+        - { $ref: "#/components/parameters/ConversationId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [upToSeq]
+              properties:
+                upToSeq: { type: integer, format: int64, minimum: 0 }
+      responses:
+        "200":
+          description: Trạng thái đã đọc
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReadState" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/conversations/{conversationId}/media:
+    post:
+      tags: [messaging]
+      operationId: requestMessageUpload
+      x-slice: 13e
+      summary: Xin chỗ tải một ảnh cho tin nhắn (URL ký sẵn, 5 phút)
+      description: |
+        Như `requestUpload` của Cộng đồng (JPG, PNG, WebP; 1 byte – 5 MB; `PUT` thẳng lên kho, đúng header và số byte đã khai), nhưng ảnh thuộc một
+        cuộc trò chuyện mình đang ở và gửi được (cuộc 1-1 bị `messages_closed`, `you_blocked` thì 403). Từ M13 URL ký có máy chủ là cổng công khai
+        của gateway (`S3_PUBLIC_ENDPOINT`), không còn là cổng của kho. Lượt: 60 ảnh mỗi ngày (tài khoản dưới 7 ngày 10; 409 `daily_limit`,
+        `limitKind: message_uploads`), 10 lần mỗi phút (429). Ảnh không gắn vào tin nào trong 24 giờ bị xóa.
+      parameters:
+        - { $ref: "#/components/parameters/ConversationId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [contentType, bytes]
+              properties:
+                contentType: { type: string, enum: [image/jpeg, image/png, image/webp] }
+                bytes: { type: integer, minimum: 1, maximum: 5242880 }
+      responses:
+        "201":
+          description: Chỗ tải lên
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UploadTicket" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403":
+          description: "`messages_closed`, `you_blocked`, `account_locked`"
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "`daily_limit` (`limitKind: message_uploads`)"
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "503":
+          description: Kho ảnh chưa sẵn sàng (`media_busy`)
+          headers:
+            Retry-After: { $ref: "#/components/headers/RetryAfter" }
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /v1/conversations/{conversationId}/media/{mediaId}/complete:
+    post:
+      tags: [messaging]
+      operationId: completeMessageUpload
+      x-slice: 13e
+      summary: Báo đã tải xong ảnh của tin nhắn; social kiểm, nén lại, xóa siêu dữ liệu
+      description: |
+        Đúng các bước của `completeUpload` (Cộng đồng, 0.2.1): số byte, loại thật theo byte đầu tệp, giải mã đủ, cạnh 32–8000 px, tối đa 25 triệu
+        điểm ảnh, không ảnh động, xoay theo EXIF, ghi lại WebP **không EXIF, XMP, ICC** (cạnh dài 1600 px, bản nhỏ 480 px), so danh sách ảnh admin đã
+        chặn (`image_blocked`). Khác Cộng đồng: chú thích (`alt`) không qua bộ lọc (quyết định 10) và ảnh **không chờ duyệt** (quyết định 11): gắn
+        vào tin là mọi thành viên thấy. Tệp lưu ở bucket riêng của tin nhắn (`pk-message-media`).
+      parameters:
+        - { $ref: "#/components/parameters/ConversationId" }
+        - { $ref: "#/components/parameters/MediaId" }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                alt: { type: [string, "null"], maxLength: 120, description: Chú thích do người gửi gõ; trống là không có. Không lấy tên tệp. }
+      responses:
+        "200":
+          description: Ảnh đã sẵn sàng gắn vào tin
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MediaInfo" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403":
+          description: "`account_locked`"
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "`upload_expired`, `upload_incomplete`"
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422":
+          description: "`image_invalid`, `image_too_large`, `image_blocked`"
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "503":
+          description: "`media_busy`"
+          headers:
+            Retry-After: { $ref: "#/components/headers/RetryAfter" }
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /v1/conversations/{conversationId}/media/{mediaId}:
+    delete:
+      tags: [messaging]
+      operationId: discardMessageUpload
+      x-slice: 13e
+      summary: Bỏ một ảnh chưa gắn vào tin (lặp được)
+      parameters:
+        - { $ref: "#/components/parameters/ConversationId" }
+        - { $ref: "#/components/parameters/MediaId" }
+      responses:
+        "204": { description: Đã bỏ }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Ảnh đã gắn vào tin (`media_unavailable`)
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /v1/messaging/contacts:
+    get:
+      tags: [messaging]
+      operationId: listMessageContacts
+      x-slice: 13e
+      summary: Danh bạ để chọn người nhắn tin hay thêm vào nhóm
+      description: |
+        Không có tìm kiếm toàn trường cho tin nhắn (chống người lạ dò học sinh để nhắn; câu hỏi 5). Danh bạ gồm, theo vai trò người gọi:
+        - **Học sinh:** bạn bè (`friend`), bạn cùng lớp đang học (`classmate`), giáo viên của lớp mình (`class_teacher`), admin (`admin`), người đã
+          có cuộc trò chuyện với mình (`recent`, 90 ngày).
+        - **Giáo viên:** học sinh của các lớp mình (`class_student`), admin, `recent`.
+        - **Admin:** admin khác, `recent`; với `q` (từ 2 kí tự) thì tìm theo tên trong mọi tài khoản chưa bị khóa (`search`, tối đa 20).
+        Mỗi người kèm `messageBlock` (null là nhắn được; web vẫn hiện người không nhắn được nhưng làm mờ kèm lý do, như bản thử). `q` lọc theo tên
+        không dấu trong danh bạ. Người bị khóa và người mình đã chặn không có trong danh bạ (như M10: người chặn không thấy người bị chặn ở đâu);
+        người đã chặn mình vẫn có nếu thuộc một nhóm trên, kèm `messages_closed` như người chỉ nhận tin của bạn bè (không lộ việc bị chặn). Người
+        lạ ngoài danh bạ nhắn được từ trang cá nhân của họ (`ProfileView.messageBlock`). Tối đa 200 người, xếp: admin, giáo viên, rồi theo tên.
+      parameters:
+        - name: q
+          in: query
+          schema: { type: string, maxLength: 80 }
+      responses:
+        "200":
+          description: Danh bạ
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ContactList" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+
 components:
   securitySchemes:
     bearerAuth:
@@ -2460,6 +3162,20 @@ components:
       required: true
       description: "0.2.0: mã ảnh (cũng là tên tệp trong kho; không chứa mã tài khoản)."
       schema: { type: string, format: uuid }
+    ConversationId:
+      name: conversationId
+      in: path
+      required: true
+      description: "0.3.0: mã cuộc trò chuyện (UUID do social cấp). Không phải thành viên thì mọi đường của nó trả 404."
+      schema: { type: string, format: uuid }
+    RequiredIdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: |
+        0.3.0: một mã cho mỗi lần bấm Gửi (web dùng UUID); gửi lại đúng mã khi thử lại sau lỗi mạng. Phạm vi là người gửi và cuộc trò chuyện;
+        giữ mãi trong tin (`clientKey`).
+      schema: { type: string, pattern: "^[A-Za-z0-9_-]{8,100}$" }
 
   headers:
     ETag:
@@ -2561,13 +3277,27 @@ components:
             - appeal_exists
             - cannot_moderate_admin
             - pin_limit
+            # 0.3.0 (M13): tin nhắn, thời gian thực
+            - messages_closed
+            - not_owner
+            - not_group
+            - group_full
+            - realtime_unavailable
         detail: { type: string, description: "Thông báo tiếng Việt, hiển thị được cho người dùng." }
         limit: { type: integer, minimum: 1, description: "Chỉ `daily_limit`: số lời mời (hay thông báo chung) tối đa mỗi ngày của người gọi." }
         resetsAt: { type: string, format: date-time, description: "Chỉ `daily_limit`: lúc ngày mới bắt đầu (00:00 giờ Việt Nam)." }
         limitKind:
           type: string
-          enum: [threads, replies, uploads, reports]
-          description: "0.2.0: chỉ `daily_limit` của Cộng đồng: lượt nào đã hết (bài, trả lời và bình luận, ảnh, báo cáo)."
+          enum: [threads, replies, uploads, reports, messages, conversations, groups, message_uploads]
+          description: |
+            0.2.0: chỉ `daily_limit` của Cộng đồng: lượt nào đã hết (bài, trả lời và bình luận, ảnh, báo cáo). 0.3.0 (M13): tin nhắn (`messages`),
+            cuộc 1-1 mới (`conversations`), nhóm mới (`groups`), ảnh của tin nhắn (`message_uploads`).
+        handles:
+          type: array
+          maxItems: 29
+          uniqueItems: true
+          items: { $ref: "#/components/schemas/Handle" }
+          description: "0.3.0: chỉ `messages_closed`, `you_blocked` khi lập nhóm hay thêm người: những người không thêm được."
         until: { type: string, format: date-time, description: "0.2.0: chỉ `muted`: lúc hết khóa đăng bài." }
         flags:
           type: array
@@ -2634,7 +3364,9 @@ components:
           enum: [everyone, friends, nobody]
           description: |
             Ai nhắn tin được (áp dụng từ M13). `nobody` = chỉ admin; giáo viên của lớp mình và admin luôn nhắn được
-            (docs/profile/PLAN.md mục 4.3).
+            (docs/profile/PLAN.md mục 4.3). 0.3.0: luật đầy đủ ở `MessageBlock`. Ghi chính xác: "giáo viên của lớp mình luôn nhắn được" là
+            **học sinh luôn nhắn được cho giáo viên của lớp mình** (bất kể cài đặt của giáo viên); giáo viên nhắn cho học sinh vẫn theo cài đặt của
+            học sinh (câu hỏi 3 của M13-GATEWAY-MESSAGING.md).
         repliesFrom:
           type: string
           enum: [everyone, nobody]
@@ -2688,6 +3420,12 @@ components:
         unreadNotifications: { type: integer, minimum: 0 }
         incomingRequests: { type: integer, minimum: 0, description: "Lời mời kết bạn đến đang chờ (giáo viên, admin luôn 0)." }
         latestNotificationAt: { type: [string, "null"], format: date-time, description: "`updatedAt` mới nhất trong thông báo của mình." }
+        unreadMessages:
+          type: integer
+          minimum: 0
+          description: |
+            0.3.0 (M13, lát `13e`): tổng tin chưa đọc của mọi cuộc trò chuyện (như `ConversationPage.unreadMessages`), cho số trên mục Tin nhắn ở
+            menu. Vắng khi social chưa có tin nhắn (trước 13e).
 
     Classmate:
       type: [object, "null"]
@@ -2947,6 +3685,11 @@ components:
         requestBlock: { $ref: "#/components/schemas/RequestBlock" }
         canCheer: { type: boolean, description: "Người xem là bạn, là học sinh, chưa cổ vũ hôm nay." }
         cheeredToday: { type: boolean }
+        messageBlock:
+          $ref: "#/components/schemas/MessageBlock"
+          description: |
+            0.3.0 (M13, lát `13e`): vì sao người xem chưa nhắn được cho chủ trang (null là nhắn được: web hiện nút "Nhắn tin"). Vắng khi social chưa
+            có tin nhắn. Bị chủ trang chặn hiện là `messages_closed`.
         parts:
           type: [object, "null"]
           additionalProperties: false
@@ -3028,6 +3771,8 @@ components:
         - community_muted
         - community_appeal_accepted
         - community_appeal_rejected
+        # 0.3.0 (M13)
+        - message_group_added
       description: |
         Thêm loại là bản thêm của hợp đồng (Cộng đồng từ 0.2.0; tin nhắn ở M13). Web bỏ qua loại lạ. Mỗi loại dùng các `params` sau:
         - `friend_request` (người nhận lời mời; `actor` người gửi): `requestId`. Bị xóa khi lời mời được trả lời, hủy, hết hạn, có chặn.
@@ -3062,6 +3807,11 @@ components:
         - `community_appeal_accepted`, `community_appeal_rejected` (người kháng nghị): `actionId`, `note`; `threadId`, `replyId`, `subject` khi
           lần xử lý nhắm vào một nội dung.
 
+        0.3.0 (M13, lát `13e`):
+        - `message_group_added` (người được thêm vào nhóm, kể cả lúc lập nhóm; `actor` người thêm): `conversationId`, `title` (tên nhóm lúc đó,
+          người dùng đặt, giống nhau ở mọi chế độ). Web dựng đường dẫn `/messages/<conversationId>`. Tin nhắn thường không tạo thông báo (số chưa
+          đọc ở mục Tin nhắn là đủ, như bản thử). Bị xóa khi người đó rời hay bị mời ra khỏi nhóm.
+
     NotificationParams:
       type: object
       additionalProperties: false
@@ -3094,6 +3844,8 @@ components:
         until: { type: string, format: date-time }
         byReports: { type: boolean }
         appealable: { type: boolean }
+        # 0.3.0 (M13)
+        conversationId: { type: string, format: uuid }
 
     Notification:
       type: object
@@ -3894,3 +4646,256 @@ components:
         term: { type: string, minLength: 2, maxLength: 60 }
         kind: { type: string, enum: [block, review] }
         createdAt: { type: string, format: date-time }
+
+    # ---------------------------------------------------------------- 0.3.0 (M13): thời gian thực, tin nhắn
+
+    RealtimeTicket:
+      type: object
+      additionalProperties: false
+      required: [ticket, expiresAt, path, maxAgeSeconds]
+      properties:
+        ticket:
+          type: string
+          pattern: "^[A-Za-z0-9_-]{43}$"
+          description: 32 byte ngẫu nhiên (base64url, không đệm). Dùng một lần, sống 60 giây. Trình duyệt gửi trong gói CONNECT của Socket.IO, không trong URL.
+        expiresAt: { type: string, format: date-time }
+        path: { type: string, const: /realtime, description: "`path` của socket.io-client, ở cổng công khai của gateway (web biết địa chỉ cổng qua `GATEWAY_PUBLIC_URL`)." }
+        maxAgeSeconds: { type: integer, minimum: 60, maximum: 86400, description: "Kết nối mở bằng vé này bị đóng sau chừng này giây (`session.ended`, `expired`)." }
+
+    ConversationKind:
+      type: string
+      enum: [direct, group]
+
+    MessageBlock:
+      type: [string, "null"]
+      enum: [self, you_blocked, messages_closed, account_locked, null]
+      description: |
+        Vì sao mình chưa nhắn được cho một người (bắt đầu cuộc 1-1, gửi tin trong cuộc 1-1, thêm vào nhóm); null là được. Luật, xét theo thứ tự
+        (M13-GATEWAY-MESSAGING.md mục 8.2):
+        1. Chính mình: `self`. Tài khoản mình bị khóa: `account_locked`.
+        2. Mình đã chặn người đó: `you_blocked`.
+        3. Người đó bị khóa, hay đã chặn mình: `messages_closed` (không lộ việc bị chặn; mã người bị khóa thì các đường nhận `handle` trả 404 như M10).
+        4. Mình là admin, hay người đó là admin: được.
+        5. Mình là học sinh của một lớp (chưa rời, lớp chưa xóa) mà người đó là giáo viên: được.
+        6. Theo `messagesFrom` của người đó: `everyone` được; `friends` chỉ khi hai người đang là bạn; `nobody` không. Không được: `messages_closed`.
+        Trong nhóm mình đang ở, gửi tin không xét luật này (người bị một thành viên chặn vẫn gửi; người chặn thấy `blockedAuthor`).
+
+    SystemEvent:
+      type: object
+      additionalProperties: false
+      description: |
+        Dòng hệ thống của nhóm, lưu bằng **mã** (luật chế độ; tên người đọc mới lúc trả lời nên đổi tên là thấy tên mới). Web dựng chữ như bản thử:
+        `group_created` "… đã tạo nhóm “title”"; `group_renamed` "… đã đổi tên nhóm thành “title”"; `members_added` "… đã thêm A, B và C vào nhóm";
+        `member_removed` "… đã mời A ra khỏi nhóm"; `member_left` "… đã rời nhóm"; `owner_changed` "A giờ là trưởng nhóm" (`actor` null, `targets[0]`
+        là trưởng nhóm mới). Không bao giờ tính là chưa đọc.
+      required: [code, actor, targets, title]
+      properties:
+        code: { type: string, enum: [group_created, group_renamed, members_added, member_removed, member_left, owner_changed] }
+        actor: { oneOf: [{ $ref: "#/components/schemas/Person" }, { type: "null" }] }
+        targets:
+          type: array
+          maxItems: 29
+          items: { $ref: "#/components/schemas/Person" }
+        title: { type: [string, "null"], minLength: 3, maxLength: 50, description: "Chỉ `group_created`, `group_renamed`: tên nhóm (mới)." }
+
+    MessageImage:
+      type: object
+      additionalProperties: false
+      description: |
+        Một ảnh của tin, đã nén lại thành WebP không còn EXIF. `url`, `thumbUrl` là URL `GET` ký sẵn (1 giờ) qua cổng công khai của gateway, chỉ ký
+        cho thành viên đọc được tin đó; trang mở lâu thì web đọc lại tin khi ảnh lỗi.
+      required: [id, alt, width, height, url, thumbUrl, urlExpiresAt]
+      properties:
+        id: { type: string, format: uuid }
+        alt: { type: [string, "null"], maxLength: 120 }
+        width: { type: integer, minimum: 1, maximum: 1600 }
+        height: { type: integer, minimum: 1, maximum: 1600 }
+        url: { type: string, maxLength: 2000 }
+        thumbUrl: { type: string, maxLength: 2000 }
+        urlExpiresAt: { type: string, format: date-time }
+
+    Message:
+      type: object
+      additionalProperties: false
+      description: |
+        Một tin như người xem thấy. Chữ người dùng viết lưu một lần, giống hệt ở mọi chế độ; máy chủ không bao giờ dịch hay lọc nó.
+        - `kind: system`: `author` null, `body` null, `system` có.
+        - `blockedAuthor`: người viết là người mình đã chặn; `body` null, `images` rỗng (web ghi "Tin nhắn từ người bạn đã chặn").
+        - `purged`: tin quá thời gian giữ; `body` null, `images` rỗng.
+        - `clientKey`: chỉ có với tin của chính mình (`Idempotency-Key` lúc gửi).
+      required: [id, conversationId, seq, kind, author, mine, body, images, system, blockedAuthor, purged, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        conversationId: { type: string, format: uuid }
+        seq: { type: integer, format: int64, minimum: 1, description: "Số thứ tự trong cuộc trò chuyện, tăng đúng 1 mỗi tin (cả dòng hệ thống)." }
+        kind: { type: string, enum: [text, system] }
+        author: { oneOf: [{ $ref: "#/components/schemas/Person" }, { type: "null" }] }
+        mine: { type: boolean }
+        body: { type: [string, "null"], minLength: 1, maxLength: 2000 }
+        images:
+          type: array
+          maxItems: 6
+          items: { $ref: "#/components/schemas/MessageImage" }
+        system: { oneOf: [{ $ref: "#/components/schemas/SystemEvent" }, { type: "null" }] }
+        blockedAuthor: { type: boolean }
+        purged: { type: boolean }
+        clientKey: { type: string, pattern: "^[A-Za-z0-9_-]{8,100}$" }
+        createdAt: { type: string, format: date-time }
+
+    MessagePreview:
+      type: object
+      additionalProperties: false
+      description: Tin mới nhất của một cuộc trò chuyện, cho dòng xem trước ở hộp thư. Cùng luật che như `Message`; `text` là tối đa 120 kí tự đầu.
+      required: [seq, kind, author, mine, text, imageCount, system, blockedAuthor, createdAt]
+      properties:
+        seq: { type: integer, format: int64, minimum: 1 }
+        kind: { type: string, enum: [text, system] }
+        author: { oneOf: [{ $ref: "#/components/schemas/Person" }, { type: "null" }] }
+        mine: { type: boolean }
+        text: { type: [string, "null"], maxLength: 120 }
+        imageCount: { type: integer, minimum: 0, maximum: 6 }
+        system: { oneOf: [{ $ref: "#/components/schemas/SystemEvent" }, { type: "null" }] }
+        blockedAuthor: { type: boolean }
+        createdAt: { type: string, format: date-time }
+
+    ConversationSummary:
+      type: object
+      additionalProperties: false
+      description: Một dòng của hộp thư. `other` là người kia của cuộc 1-1 (null với nhóm); `title` là tên nhóm (null với 1-1).
+      required: [id, kind, title, other, memberCount, lastSeq, lastMessage, lastActivityAt, unread]
+      properties:
+        id: { type: string, format: uuid }
+        kind: { $ref: "#/components/schemas/ConversationKind" }
+        title: { type: [string, "null"], minLength: 3, maxLength: 50 }
+        other: { oneOf: [{ $ref: "#/components/schemas/Person" }, { type: "null" }] }
+        memberCount: { type: integer, minimum: 1, maximum: 30 }
+        lastSeq: { type: integer, format: int64, minimum: 0 }
+        lastMessage: { oneOf: [{ $ref: "#/components/schemas/MessagePreview" }, { type: "null" }] }
+        lastActivityAt: { type: string, format: date-time, description: "Lúc tin cuối (hay lúc tạo, khi chưa có tin)." }
+        unread: { type: integer, minimum: 0, maximum: 99, description: Tin chữ chưa đọc của người khác; 99 là từ 99 trở lên. }
+
+    ConversationPage:
+      type: object
+      additionalProperties: false
+      required: [items, nextCursor, unreadMessages]
+      properties:
+        items:
+          type: array
+          maxItems: 50
+          items: { $ref: "#/components/schemas/ConversationSummary" }
+        nextCursor: { type: [string, "null"] }
+        unreadMessages: { type: integer, minimum: 0, description: Tổng tin chưa đọc của mọi cuộc trò chuyện (không chỉ trang này). }
+
+    ConversationMember:
+      type: object
+      additionalProperties: false
+      required: [person, isOwner, joinedAt]
+      properties:
+        person: { $ref: "#/components/schemas/Person" }
+        isOwner: { type: boolean }
+        joinedAt: { type: string, format: date-time }
+
+    ConversationDetail:
+      type: object
+      additionalProperties: false
+      required: [id, kind, title, owner, isOwner, members, memberCount, maxMembers, lastSeq, joinedSeq, lastReadSeq, unread, sendBlock, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        kind: { $ref: "#/components/schemas/ConversationKind" }
+        title: { type: [string, "null"], minLength: 3, maxLength: 50 }
+        owner: { oneOf: [{ $ref: "#/components/schemas/Handle" }, { type: "null" }], description: Trưởng nhóm (null với 1-1). }
+        isOwner: { type: boolean }
+        members:
+          type: array
+          maxItems: 30
+          description: Thành viên hiện tại, vào sớm trước. Cuộc 1-1 có đúng hai người.
+          items: { $ref: "#/components/schemas/ConversationMember" }
+        memberCount: { type: integer, minimum: 1, maximum: 30 }
+        maxMembers: { type: integer, minimum: 2, maximum: 30, description: "30 với nhóm, 2 với 1-1." }
+        lastSeq: { type: integer, format: int64, minimum: 0 }
+        joinedSeq: { type: integer, format: int64, minimum: 0, description: Mình chỉ đọc được tin có `seq` lớn hơn số này (người vào nhóm sau). }
+        lastReadSeq: { type: integer, format: int64, minimum: 0 }
+        unread: { type: integer, minimum: 0, maximum: 99 }
+        sendBlock:
+          $ref: "#/components/schemas/MessageBlock"
+          description: Vì sao mình chưa gửi được vào cuộc này (chỉ cuộc 1-1; với nhóm là null hay `account_locked`).
+        createdAt: { type: string, format: date-time }
+
+    NewConversation:
+      type: object
+      additionalProperties: false
+      description: |
+        `kind: direct` cần `handle` (không gửi `title`, `handles`); `kind: group` cần `title` và `handles` (2–29 người khác, không gồm mình). Sai cách
+        ghép thì 400 (ghi ở đây thay vì `oneOf`, theo README của contracts).
+      required: [kind]
+      properties:
+        kind: { $ref: "#/components/schemas/ConversationKind" }
+        handle: { $ref: "#/components/schemas/Handle" }
+        title: { type: string, minLength: 3, maxLength: 50 }
+        handles:
+          type: array
+          minItems: 2
+          maxItems: 29
+          uniqueItems: true
+          items: { $ref: "#/components/schemas/Handle" }
+
+    NewMessage:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      description: Chữ, ảnh hay cả hai; chữ chỉ có khoảng trắng tính là trống (400).
+      properties:
+        body: { type: string, minLength: 1, maxLength: 2000 }
+        mediaIds:
+          type: array
+          minItems: 1
+          maxItems: 6
+          uniqueItems: true
+          items: { type: string, format: uuid }
+
+    MessagePage:
+      type: object
+      additionalProperties: false
+      required: [items, lastSeq, joinedSeq, hasMoreBefore, hasMoreAfter]
+      properties:
+        items:
+          type: array
+          maxItems: 100
+          items: { $ref: "#/components/schemas/Message" }
+        lastSeq: { type: integer, format: int64, minimum: 0 }
+        joinedSeq: { type: integer, format: int64, minimum: 0 }
+        hasMoreBefore: { type: boolean }
+        hasMoreAfter: { type: boolean }
+
+    ReadState:
+      type: object
+      additionalProperties: false
+      required: [conversationId, lastReadSeq, unread, unreadMessages]
+      properties:
+        conversationId: { type: string, format: uuid }
+        lastReadSeq: { type: integer, format: int64, minimum: 0 }
+        unread: { type: integer, minimum: 0, maximum: 99 }
+        unreadMessages: { type: integer, minimum: 0 }
+
+    MessageContact:
+      type: object
+      additionalProperties: false
+      required: [person, reasons, messageBlock]
+      properties:
+        person: { $ref: "#/components/schemas/Person" }
+        reasons:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: { type: string, enum: [friend, classmate, class_teacher, class_student, admin, recent, search] }
+        messageBlock: { $ref: "#/components/schemas/MessageBlock" }
+
+    ContactList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          maxItems: 200
+          items: { $ref: "#/components/schemas/MessageContact" }

@@ -1,7 +1,7 @@
 asyncapi: 3.0.0
 info:
   title: PkKemis — sự kiện giữa các service
-  version: 0.4.0
+  version: 0.4.1
   description: |
     Hợp đồng sự kiện trên Kafka của PkKemis (docs/backend/M8-EVENTS.md). Cùng quy tắc với OpenAPI: **chỉ thêm, không xóa hay đổi nghĩa**.
 
@@ -29,6 +29,12 @@ info:
     `XpSource`: `community_answer` (+20), `community_vote` (+2, tối đa 50 mỗi ngày), số XP và trần do learning giữ. social phát
     `moderation.ban_requested` khi admin khóa tài khoản từ kiểm duyệt (lát `12c`); identity nghe (nhóm `identity`, lát `12f`, lần đầu identity
     đọc Kafka) và khóa tài khoản. ACL: `learning`, `identity` đọc `social.events`, ghi `social.events.dlq`; nhóm đọc mới `identity`.
+
+    0.4.1 (M13, docs/backend/M13-GATEWAY-MESSAGING.md; chỉ mô tả): M13 **không** thêm sự kiện, topic hay ACL Kafka nào. Tin nhắn không đi qua
+    Kafka (không ai ngoài social cần; nội dung riêng tư không vào sự kiện), nên `message.created` của SERVICES.md mục 6.9 không phát. social
+    dùng thêm các `user.*` đã nghe từ M10: `user.locked` thì đóng kết nối thời gian thực của người đó và chặn gửi tin; `user.role_changed` thì
+    tính lại luật nhắn tin (giáo viên của lớp). Thu hồi token tức thì đi qua Redis (kênh `pk:revoked`, khóa `rv:*`), Socket.IO tới trình duyệt:
+    `asyncapi/realtime.yaml` 0.1.0.
 
     **Phong bì:** mọi tin là một CloudEvent 1.0 dạng structured (cả phong bì là giá trị của bản ghi Kafka, JSON UTF-8), header
     `content-type: application/cloudevents+json; charset=UTF-8`. Khóa bản ghi là `subject` (mã người dùng), nên sự kiện của cùng một người
