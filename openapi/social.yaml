@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: PkKemis social
-  version: 0.2.0
+  version: 0.2.1
   summary: Bạn bè, lời mời, chặn, quyền riêng tư của trang cá nhân, trang cá nhân người khác, bảng xếp hạng bạn bè, thông báo, Cộng đồng, kiểm duyệt, ảnh.
   description: |
     0.1.0 (docs/backend/M10-SOCIAL.md): service mới, NestJS. Phần 1 của social (PHASE2 M10): bạn bè, cổ vũ, chặn, quyền riêng tư của trang
@@ -17,6 +17,22 @@ info:
     lại, xóa EXIF, mọi ảnh chờ admin duyệt; lát `12d`), **XP Cộng đồng** (social quyết lần chọn, lần tán thành nào được tính và phát sự kiện
     `community.*` sang learning; lát `12e`; asyncapi/pkkemis.yaml 0.4.0). Thêm 11 loại thông báo `community_*`, mã lỗi mới, `Suggestion`
     thêm `answeredMyQuestion`.
+
+    0.2.1 (lượt soát M12, chỉ thêm; không thêm trường, mã lỗi, schema hay thao tác nào; khớp social commit `26b2074`): ghi các phản hồi
+    social đã trả mà hợp đồng chưa ghi.
+    - 403 `account_locked` ở `likeThread`, `saveThread`, `acceptReply`, `unacceptReply`, `deleteMyThread`, `deleteMyReply`, `reportContent`,
+      `createAppeal`, `completeUpload` (cùng `muted`); 403 `forbidden` khi admin báo cáo.
+    - `completeUpload`: thêm phản hồi 400, 403, 422 `content_blocked` (chú thích ảnh qua bộ lọc từ ngữ); cạnh dưới 32 px là `image_invalid`
+      (không phải `image_too_large`); PNG 16 bit quá 8 triệu điểm ảnh là `image_too_large`. `requestUpload` 503 `media_busy` khi kho ảnh
+      chưa sẵn sàng.
+    - `reviewMedia` 409 `cannot_moderate_admin`, 422 `image_blocked`; `moderateThread` 409 `thread_not_visible` khi ghim bài không hiện;
+      `sanctionMember` 200 `changed: false` khi `ban` không đổi gì (đã khóa, hay đã có `ban` trong 5 phút; không phát sự kiện thứ hai).
+    - `createAppeal` gửi lại cùng `Idempotency-Key` cũng là 201 (đúng thân lần đầu).
+    - Bình luận dưới câu trả lời của người đã chặn mình: 201, bình luận chỉ hiện với người viết và admin (trước đây mô tả là 403
+      `replies_closed`; người bị chặn không bao giờ biết, M12-COMMUNITY.md mục 4.3).
+    - Báo cáo của người từng bị admin bỏ qua báo cáo về cùng nội dung không đếm cho tự ẩn; nội dung hiện lại (`restore`, bỏ qua báo cáo,
+      chấp nhận kháng nghị) mà còn bị một kiểm giữ chưa được duyệt thì về hàng chờ duyệt, không thông báo `community_restored`.
+    - learning không trả lời lúc đăng thì bài không giữ mã khóa, chương, bài, câu (`refs` trống).
 
     - **Cộng đồng chỉ dùng mã hồ sơ.** Tác giả, người báo cáo, người được xử lý đều là `Person` (`handle`), như phần bạn bè. Mã tài khoản
       thật của người khác không có trong bất kì phản hồi Cộng đồng nào cho học sinh, giáo viên; đường admin chỉ trả thêm `userId` ở
@@ -1109,7 +1125,9 @@ paths:
            kèm `flags` (bài không được lưu, lượt không bị trừ). Admin không qua bộ lọc.
         5. Hỏi learning (`POST /internal/community/screen`, hạn 1,5 giây): đoạn chữ chép đề bài của đề đang mở → cờ `exam_overlap`; câu hỏi
            về một câu đang nằm trong đề đang mở → 409 `question_in_open_exam`; bài học, chương, câu không có (hay chưa mở với học sinh) → 400
-           với lỗi từng trường. learning không trả lời → cờ `exam_check_failed` (bài chờ duyệt, không bao giờ cho qua).
+           với lỗi từng trường. learning không trả lời → cờ `exam_check_failed` (bài chờ duyệt, không bao giờ cho qua); 0.2.1: khi đó bài
+           **không giữ** mã khóa, chương, bài, câu đã gửi (`refs` trống cả bốn), vì không ai kiểm được chúng, để mã sai không theo bài lên
+           bảng tin khi admin duyệt.
         6. `achievementId` phải là thành tích mình đã đạt (bản sao huy hiệu của social): 409 `achievement_not_unlocked`. Ảnh (`mediaIds`) phải
            là ảnh của mình đã tải xong, chưa gắn vào bài nào: 409 `media_unavailable`.
         7. Trạng thái: tài khoản dưới 7 ngày (cờ `new_account`), hay có cờ cần xem lại → `pending` (chỉ mình và admin thấy); còn lại `visible`.
@@ -1270,14 +1288,15 @@ paths:
       summary: Tác giả xóa bài của mình
       description: |
         Chỉ tác giả (admin xóa qua kiểm duyệt). Bài và mọi câu trả lời, bình luận của nó không còn hiện với ai; chữ và ảnh bị xóa hẳn sau 30
-        ngày (giữ để xử lý báo cáo đang mở). XP đã cộng không bị trừ. Lặp được (đã xóa thì vẫn 204).
+        ngày (giữ để xử lý báo cáo đang mở). XP đã cộng không bị trừ. Lặp được (đã xóa thì vẫn 204). Tài khoản bị khóa: 403 `account_locked`
+        (0.2.1; kiểm trước mọi thứ khác, kể cả khi bài đã xóa).
       parameters:
         - { $ref: "#/components/parameters/ThreadId" }
       responses:
         "204": { description: Đã xóa }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403":
-          description: Không phải tác giả (`not_author`)
+          description: Không phải tác giả (`not_author`); tài khoản bị khóa (`account_locked`, 0.2.1)
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
@@ -1291,7 +1310,8 @@ paths:
       summary: Thích bài (lặp được)
       description: |
         Chỉ bài đang hiện; thích bài của mình được (như bản thử; thích không có XP). Lượt thích của người mà tác giả đã chặn được ghi nhận
-        nhưng **không tính** vào số (người đó không được báo; M12-COMMUNITY.md mục 4.3).
+        nhưng **không tính** vào số (người đó không được báo; M12-COMMUNITY.md mục 4.3). Tài khoản bị khóa: 403 `account_locked` (0.2.1);
+        khóa đăng bài không chặn thích. Bỏ thích (`DELETE`) không bị chặn vì khóa.
       parameters:
         - { $ref: "#/components/parameters/ThreadId" }
       responses:
@@ -1301,6 +1321,11 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/LikeState" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "403":
+          description: Tài khoản bị khóa (`account_locked`, 0.2.1)
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
         "404": { $ref: "#/components/responses/NotFound" }
         "429": { $ref: "#/components/responses/TooManyRequests" }
     delete:
@@ -1325,11 +1350,17 @@ paths:
       operationId: saveThread
       x-slice: 12a
       summary: Lưu bài (riêng mình; lặp được)
+      description: Chỉ bài đang hiện. Tài khoản bị khóa không lưu thêm được (403 `account_locked`, 0.2.1); bỏ lưu (`DELETE`) luôn được.
       parameters:
         - { $ref: "#/components/parameters/ThreadId" }
       responses:
         "204": { description: Đã lưu }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "403":
+          description: Tài khoản bị khóa (`account_locked`, 0.2.1)
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
         "404": { $ref: "#/components/responses/NotFound" }
     delete:
       tags: [community]
@@ -1354,7 +1385,8 @@ paths:
         không phải của chính mình (409 `cannot_accept_own`). Trong một giao dịch có khóa dòng câu hỏi: ghi lựa chọn, thông báo
         `community_accepted` cho người trả lời, quyết XP và phát `community.answer_accepted` (lát `12e`; asyncapi 0.4.0). **XP +20 chỉ cho lần
         chọn đầu tiên của mỗi câu hỏi** và theo luật chống farm của mục 8 (M12-COMMUNITY.md); đổi lựa chọn hay bỏ rồi chọn lại không cộng
-        thêm, không trừ. Chọn lại đúng câu đang chọn: 200, không làm gì.
+        thêm, không trừ. Chọn lại đúng câu đang chọn: 200, không làm gì. Tài khoản bị khóa: 403 `account_locked` (0.2.1); khóa đăng bài không
+        chặn việc chọn.
       parameters:
         - { $ref: "#/components/parameters/ThreadId" }
       requestBody:
@@ -1375,7 +1407,7 @@ paths:
               schema: { $ref: "#/components/schemas/AcceptState" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403":
-          description: Không phải người hỏi (`not_author`)
+          description: Không phải người hỏi (`not_author`); tài khoản bị khóa (`account_locked`, 0.2.1)
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
@@ -1390,6 +1422,7 @@ paths:
       operationId: unacceptReply
       x-slice: 12a
       summary: Bỏ chọn câu trả lời hay nhất (lặp được; XP đã cộng giữ nguyên)
+      description: "Chỉ người hỏi. Tài khoản bị khóa: 403 `account_locked` (0.2.1)."
       parameters:
         - { $ref: "#/components/parameters/ThreadId" }
       responses:
@@ -1400,7 +1433,7 @@ paths:
               schema: { $ref: "#/components/schemas/AcceptState" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403":
-          description: Không phải người hỏi (`not_author`)
+          description: Không phải người hỏi (`not_author`); tài khoản bị khóa (`account_locked`, 0.2.1)
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
@@ -1417,8 +1450,15 @@ paths:
         dưới nó (một cấp; bình luận dưới bình luận, hay dưới bình luận của bài viết: 400). Luật như `createThread` (khóa, khóa đăng bài, lượt
         trong ngày 20 / 100, nội dung lặp, bộ lọc, đề đang mở) với hai khác biệt: tài khoản dưới 7 ngày **không** phải chờ duyệt (chỉ qua bộ
         lọc), và không có ảnh. Bài phải đang hiện (409 `thread_not_visible`). Chủ bài đặt "Ai trả lời bài của tôi: Không ai" (`repliesFrom:
-        nobody`, social.yaml 0.1.0) thì chỉ admin trả lời được; **người bị chủ bài (hay chủ câu trả lời được bình luận) chặn nhận cùng lỗi 403
-        `replies_closed`**, để không biết mình bị chặn. Hiện ngay thì thông báo `community_answer` / `community_comment` cho người liên quan.
+        nobody`, social.yaml 0.1.0) thì chỉ admin trả lời được; **người bị chủ bài chặn nhận cùng lỗi 403 `replies_closed`**, để không biết
+        mình bị chặn. Hiện ngay thì thông báo `community_answer` / `community_comment` cho người liên quan.
+
+        **Bình luận dưới câu trả lời của người đã chặn mình** (chủ câu trả lời khác chủ bài; 0.2.1, M12-COMMUNITY.md mục 4.3): **không** có
+        `replies_closed` vì lý do này. Máy chủ nhận như thường (201; `outcome` như khi không bị chặn: hiện ngay, hay chờ duyệt nếu bộ lọc gắn
+        cờ; lượt trong ngày bị trừ), nhưng bình luận **chỉ hiện với người viết và admin**: không tính vào `replyCount`, không thông báo cho ai,
+        không vào hàng chờ duyệt, admin không duyệt cho hiện được. Với người viết, `getThread` trả bình luận đó như khi không bị chặn (cùng
+        `status`). Bình luận đã hiện từ trước khi chặn thì giữ nguyên với người khác; người chặn không thấy (lọc lúc đọc, như mọi nội dung của
+        người mình chặn).
       parameters:
         - { $ref: "#/components/parameters/ThreadId" }
         - { $ref: "#/components/parameters/OptionalIdempotencyKey" }
@@ -1466,14 +1506,14 @@ paths:
       summary: Tác giả xóa câu trả lời hay bình luận của mình
       description: |
         Xóa câu trả lời thì bình luận dưới nó cũng không còn hiện; câu trả lời đang được chọn thì câu hỏi trở lại "chưa có lời giải" (XP đã
-        cộng giữ nguyên). Lặp được.
+        cộng giữ nguyên). Lặp được. Tài khoản bị khóa: 403 `account_locked` (0.2.1; kiểm trước mọi thứ khác).
       parameters:
         - { $ref: "#/components/parameters/ReplyId" }
       responses:
         "204": { description: Đã xóa }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403":
-          description: Không phải tác giả (`not_author`)
+          description: Không phải tác giả (`not_author`); tài khoản bị khóa (`account_locked`, 0.2.1)
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
@@ -1616,6 +1656,10 @@ paths:
         dung có báo cáo đang mở từ **3 người khác nhau có tài khoản từ 7 ngày**, nó tạm ẩn ngay (`hidden_by: reports`, nhật ký ghi là hệ
         thống), tác giả nhận `community_hidden` với `byReports: true`; nội dung của admin không bao giờ tự ẩn. Người báo cáo không được biết nội
         dung đã ẩn hay chưa. "Bắt nạt", "Nội dung người lớn" lên đầu hàng chờ.
+
+        0.2.1: admin không báo cáo (xử lý thẳng ở kiểm duyệt): 403 `forbidden`, trước mọi kiểm khác. Tài khoản bị khóa: 403 `account_locked`;
+        khóa đăng bài **không** chặn báo cáo. Người từng có báo cáo về **cùng** nội dung bị admin bỏ qua (`dismissed`) vẫn báo cáo lại được
+        (vào hàng chờ) nhưng báo cáo mới không đếm cho tự ẩn, để cùng ba người không ẩn lại được sau mỗi lần admin bỏ qua.
       requestBody:
         required: true
         content:
@@ -1635,6 +1679,11 @@ paths:
               schema: { $ref: "#/components/schemas/ReportReceipt" }
         "400": { $ref: "#/components/responses/ValidationFailed" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "403":
+          description: "0.2.1: người gọi là admin (`forbidden`); tài khoản bị khóa (`account_locked`)"
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409":
           description: "`daily_limit` (`limitKind: reports`), `self` (nội dung của mình)"
@@ -1674,6 +1723,13 @@ paths:
         Kháng nghị được: ẩn và xóa của admin, nhắc nhở, khóa đăng bài, ảnh bị từ chối; trong 30 ngày kể từ lần xử lý (409 `not_appealable`).
         Tự ẩn do báo cáo chưa phải quyết định cuối (chờ admin), nên chưa kháng nghị được. Khóa tài khoản không kháng nghị trong app (người bị
         khóa không đăng nhập được). Mỗi lần xử lý một kháng nghị (409 `appeal_exists`). Vào hàng chờ "Kháng nghị" của admin.
+
+        0.2.1: tài khoản bị khóa: 403 `account_locked` (token còn hạn sau khi identity khóa). **Quy ước `Idempotency-Key` của thao tác này:**
+        gửi lại cùng mã trong 24 giờ với cùng `actionId` và `message` trả **201** kèm đúng thân của lần đầu (không phải trạng thái hiện tại của
+        kháng nghị; đọc trạng thái mới ở `GET /v1/community/me/moderation`), không tạo kháng nghị thứ hai và không trả 409 `appeal_exists`;
+        cùng mã khác nội dung: 422 `idempotency_mismatch`. Khác `createThread`, `createReply`, `sanctionMember` (lần gửi lại là 200): bên gọi
+        không phân biệt lần đầu với lần gửi lại ở đây, nên coi 201 là "đã có kháng nghị này". Gửi lại không kèm mã (hay mã khác) khi đã có
+        kháng nghị: 409 `appeal_exists`.
       parameters:
         - { $ref: "#/components/parameters/OptionalIdempotencyKey" }
       requestBody:
@@ -1689,12 +1745,17 @@ paths:
                 message: { type: string, minLength: 10, maxLength: 500 }
       responses:
         "201":
-          description: Đã gửi
+          description: Đã gửi; cũng là phản hồi của lần gửi lại cùng `Idempotency-Key` (đúng thân lần đầu, 0.2.1)
           content:
             application/json:
               schema: { $ref: "#/components/schemas/AppealState" }
         "400": { $ref: "#/components/responses/ValidationFailed" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "403":
+          description: "0.2.1: tài khoản bị khóa (`account_locked`)"
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409":
           description: "`not_appealable`, `appeal_exists`"
@@ -1721,6 +1782,9 @@ paths:
         social), phải gửi đúng header trong `headers` và đúng số byte đã khai. Khóa tệp là mã ảnh, không có mã tài khoản. Tài khoản bị khóa,
         đang bị khóa đăng bài: 403. Lượt trong ngày: 5 (tài khoản dưới 7 ngày) hay 30 ảnh (409 `daily_limit`, `limitKind: uploads`); 10 lần mỗi
         phút (429). Ảnh không gắn vào bài nào trong 24 giờ bị xóa.
+
+        0.2.1: social chưa được cấu hình kho ảnh (thiếu `S3_ENDPOINT` hay khóa): 503 `media_busy` kèm `Retry-After` (sau khi kiểm thân yêu cầu,
+        trước khi kiểm khóa và lượt; không ăn lượt). Web hiện như "máy chủ bận, thử lại sau".
       requestBody:
         required: true
         content:
@@ -1757,6 +1821,13 @@ paths:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
         "429": { $ref: "#/components/responses/TooManyRequests" }
+        "503":
+          description: "0.2.1: kho ảnh chưa sẵn sàng (`media_busy`)"
+          headers:
+            Retry-After: { $ref: "#/components/headers/RetryAfter" }
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
 
   /v1/community/media/{mediaId}/complete:
     post:
@@ -1766,11 +1837,25 @@ paths:
       summary: Báo đã tải xong; social kiểm, nén lại, xóa siêu dữ liệu
       description: |
         social đọc tệp ở khu nhận và (mục 7.3 của M12-COMMUNITY.md): kiểm số byte đúng như khai; kiểm **loại thật** theo byte đầu tệp (phải
-        đúng loại đã khai; SVG, GIF, HEIC, tệp khác bị từ chối); giải mã đủ bằng `sharp` (hỏng: `image_invalid`); cạnh 32–8000 px, tối đa 25
-        triệu điểm ảnh (`image_too_large`); ảnh động bị từ chối; xoay theo EXIF rồi **ghi lại thành WebP không còn EXIF, XMP, ICC** (cạnh dài
+        đúng loại đã khai; SVG, GIF, HEIC, tệp khác bị từ chối); giải mã đủ bằng `sharp` (hỏng: `image_invalid`); mỗi cạnh tối đa 8000 px và
+        tối đa 25 triệu điểm ảnh (quá: `image_too_large`); **cạnh dưới 32 px: `image_invalid`** (0.2.1; trước đây mô tả gộp "32–8000 px" vào
+        `image_too_large`); ảnh động bị từ chối; xoay theo EXIF rồi **ghi lại thành WebP không còn EXIF, XMP, ICC** (cạnh dài
         tối đa 1600 px và bản nhỏ 480 px); so mã băm với danh sách ảnh admin đã chặn (`image_blocked`). Tệp gốc bị xóa ngay. Ảnh qua kiểm
         vẫn **chờ admin duyệt** sau khi gắn vào bài (trừ ảnh của admin). Hết hạn tải lên: 409 `upload_expired`; chưa có tệp: 409
         `upload_incomplete`; quá nhiều ảnh đang xử lý: 503 `media_busy` kèm `Retry-After`. Lặp được: ảnh đã xong trả lại kết quả.
+
+        0.2.1:
+        - Thứ tự: ảnh đã xong thì trả lại kết quả trước mọi kiểm (kể cả khi tài khoản đã bị khóa sau đó); rồi tài khoản bị khóa: 403
+          `account_locked`; đang bị khóa đăng bài: 403 `muted` (kèm `until`); rồi chú thích; rồi hạn tải lên; rồi kho ảnh chưa sẵn sàng hay
+          đang bận: 503 `media_busy`.
+        - **Chú thích** (`alt`) là chữ người khác đọc, nên qua cùng bộ lọc từ ngữ như bài (admin không qua): có bất kì cờ nào (từ bị chặn, từ
+          cần xem lại, số điện thoại, email, liên kết) là 422 `content_blocked` kèm `flags`; chỗ tải lên vẫn còn, người đăng sửa chú thích rồi
+          gửi lại.
+        - Mọi lỗi 422 về **tệp** (`image_invalid`, `image_too_large`, `image_blocked`) bỏ luôn chỗ tải lên (tệp nhận bị xóa, lượt ảnh trong ngày
+          không trả lại): gọi lại `complete` cho cùng `mediaId` nhận 409 `upload_expired`; muốn thử ảnh khác thì xin chỗ mới.
+        - PNG 16 bit mỗi kênh giải mã tốn gấp đôi bộ nhớ, nên trần riêng là 8 triệu điểm ảnh (quá: `image_too_large`), ngoài trần chung 25
+          triệu.
+        - Mỗi lần social chỉ giải mã số ảnh theo `MEDIA_MAX_CONCURRENT` (mặc định trong mã 1, Compose đặt 2); quá thì 503 `media_busy`.
       parameters:
         - { $ref: "#/components/parameters/MediaId" }
       requestBody:
@@ -1788,7 +1873,13 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/MediaInfo" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "403":
+          description: "0.2.1: tài khoản bị khóa (`account_locked`); đang bị khóa đăng bài (`muted`, kèm `until`)"
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409":
           description: "`upload_expired`, `upload_incomplete`"
@@ -1796,7 +1887,7 @@ paths:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
         "422":
-          description: "`image_invalid`, `image_too_large`, `image_blocked`"
+          description: "`image_invalid` (kể cả cạnh dưới 32 px), `image_too_large`, `image_blocked`; 0.2.1: chú thích bị bộ lọc giữ (`content_blocked`, kèm `flags`)"
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
@@ -1939,6 +2030,14 @@ paths:
         đang mở của bài (`resolved`), và thông báo cho tác giả (`community_approved`, `community_hidden`, `community_restored`; không có với ghim).
         `approve` một bài đang chờ mà người hỏi đã có câu trả lời chờ thì không đổi gì ở câu trả lời. Ghim tối đa 3 bài (409 `pin_limit`). Nội
         dung của admin không bị `hide` bởi admin khác qua đây (409 `cannot_moderate_admin`). Lặp được: trạng thái đã đúng thì 200, không ghi thêm.
+
+        0.2.1:
+        - Chỉ ghim được bài đang hiện: ghim bài chờ duyệt, bị ẩn hay đã xóa là 409 `thread_not_visible` (kiểm trước `pin_limit`).
+        - `restore`: nội dung bị giữ vì một kiểm (cờ của bộ lọc, trùng đề, chưa kiểm được đề, tài khoản mới) mà **chưa admin nào duyệt** thì
+          hiện lại vào hàng chờ duyệt (`pending`), không lên bảng tin, và tác giả **không** nhận `community_restored`; phản hồi vẫn là
+          `changed: true`. Muốn cho hiện thì `approve`. Cùng luật cho bỏ qua báo cáo (`dismissReports`) và chấp nhận kháng nghị
+          (`resolveAppeal`).
+        - `hide`, `delete` một bài cũng đóng các báo cáo đang mở về câu trả lời, bình luận của bài đó.
       parameters:
         - { $ref: "#/components/parameters/ThreadId" }
       requestBody:
@@ -1957,7 +2056,7 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409":
-          description: "`pin_limit`, `cannot_moderate_admin`"
+          description: "`pin_limit`, `cannot_moderate_admin`; 0.2.1: `thread_not_visible` (ghim bài không đang hiện)"
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
@@ -1969,8 +2068,10 @@ paths:
       x-slice: 12c
       summary: Duyệt, ẩn, hiện lại, xóa một câu trả lời hay bình luận (admin)
       description: |
-        Như `moderateThread` (không có ghim). Duyệt một câu trả lời đang chờ thì người hỏi (hay chủ câu trả lời được bình luận) nhận thông báo
-        như lúc nó được đăng. Ẩn hay xóa câu trả lời đang được chọn thì câu hỏi trở lại "chưa có lời giải".
+        Như `moderateThread` (không có ghim; cùng luật `restore` của 0.2.1). Duyệt một câu trả lời đang chờ thì người hỏi (hay chủ câu trả lời
+        được bình luận) nhận thông báo như lúc nó được đăng. Ẩn hay xóa câu trả lời đang được chọn thì câu hỏi trở lại "chưa có lời giải".
+        0.2.1: bình luận chỉ người viết và admin thấy (người viết bị chủ câu trả lời chặn, xem `createReply`) không duyệt cho hiện được:
+        `approve` trả `changed: false`.
       parameters:
         - { $ref: "#/components/parameters/ReplyId" }
       requestBody:
@@ -2002,7 +2103,9 @@ paths:
       summary: Bỏ qua mọi báo cáo đang mở của một nội dung (admin)
       description: |
         Báo cáo thành `dismissed`. Nội dung đang tự ẩn do báo cáo thì hiện lại và tác giả nhận `community_restored`. Với `lowScore`: đánh dấu đã
-        xem, không hiện lại ở hàng chờ cho tới khi có báo cáo mới.
+        xem, không hiện lại ở hàng chờ cho tới khi có báo cáo mới. 0.2.1: nội dung tự ẩn mà còn bị giữ vì một kiểm chưa được duyệt thì về hàng
+        chờ duyệt, không thông báo (như `restore` của `moderateThread`); người có báo cáo bị bỏ qua ở đây, nếu báo cáo lại cùng nội dung, không
+        còn đếm cho tự ẩn (`reportContent`).
       requestBody:
         required: true
         content:
@@ -2029,6 +2132,11 @@ paths:
         `approve`: ảnh hiện với mọi người (khi bài đang hiện). `reject` cần `reasonCode`: ảnh không còn hiện với ai trừ admin, tác giả nhận
         `community_image_rejected` (kháng nghị được); tệp bị xóa sau 30 ngày. `blockHash: true` thêm mã băm vào danh sách chặn: lần tải lên đúng
         ảnh đó bị từ chối (`image_blocked`), ảnh gần giống bị gắn cờ cho admin. Lặp được.
+
+        0.2.1:
+        - Từ chối ảnh trong bài của admin: 409 `cannot_moderate_admin` (cùng luật với nội dung của admin).
+        - Duyệt một ảnh mà mã băm đã nằm trong danh sách chặn (chặn sau khi ảnh được tải lên): 422 `image_blocked`; ảnh vẫn chờ duyệt.
+        - `blockHash` chỉ đi với `reject` (với `approve`: 400). Từ chối lại ảnh đã bị từ chối: 200 `changed: false`, không thêm mã băm.
       parameters:
         - { $ref: "#/components/parameters/MediaId" }
       requestBody:
@@ -2054,6 +2162,16 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "0.2.1: từ chối ảnh của admin (`cannot_moderate_admin`)"
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422":
+          description: "0.2.1: duyệt ảnh có mã băm trong danh sách chặn (`image_blocked`)"
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
 
   /v1/admin/community/appeals/{appealId}/resolution:
     post:
@@ -2064,6 +2182,9 @@ paths:
       description: |
         Chấp nhận: hoàn lại lần xử lý (hiện lại nội dung, ảnh; gỡ khóa đăng bài; nhắc nhở ghi là đã rút), người kháng nghị nhận
         `community_appeal_accepted`. Giữ nguyên: `community_appeal_rejected`. Ghi nhật ký. Kháng nghị đã xử lý: 409 `not_appealable`.
+        0.2.1: nội dung được hoàn lại mà còn bị giữ vì một kiểm chưa được duyệt thì về hàng chờ duyệt (như `restore` của `moderateThread`);
+        nội dung hay ảnh đã bị xóa hẳn thì không hoàn lại được (409 `not_appealable`). Chấp nhận kháng nghị ảnh bị từ chối cũng gỡ mã băm của ảnh
+        đó khỏi danh sách chặn.
       parameters:
         - name: appealId
           in: path
@@ -2131,6 +2252,14 @@ paths:
           hiện với ai trừ admin, và mọi thao tác ghi của họ bị 403 `account_locked`. Mở khóa ở `/admin/users` như mọi tài khoản (nội dung hiện
           lại). Không có lý do chữ trong sự kiện, chỉ mã.
         `Idempotency-Key` (tùy chọn): bấm đúp không xử lý hai lần.
+
+        0.2.1:
+        - `ban` không đổi gì thì **200** `changed: false` (không ghi nhật ký, không phát sự kiện): tài khoản đã bị khóa (social đã nhận
+          `user.locked`): `actionId: null`; đã có một lần `ban` cho người này trong 5 phút qua (bấm lại, hay identity chưa kịp khóa):
+          `actionId` là mã lần `ban` đó, **không** phát `moderation.ban_requested` thứ hai. `warn`, `mute` luôn là 201 (mỗi lần một dòng).
+        - `relatedActionId` phải là một lần xử lý của **chính người này**; không thì 400 (`relatedActionId`).
+        - Khóa đăng bài tính từ lúc social giữ khóa của người đó, không từ lúc yêu cầu đến: bài nào đã ghi xong trước đó không nằm trong khoảng
+          khóa; bài đang ghi dở mà chưa xong thì bị 403 `muted`.
       parameters:
         - { $ref: "#/components/parameters/Handle" }
         - { $ref: "#/components/parameters/OptionalIdempotencyKey" }
@@ -2142,7 +2271,9 @@ paths:
             example: { kind: mute, days: 7, reasonCode: bullying, note: Bình luận chê bai bạn khác nhiều lần. }
       responses:
         "200":
-          description: Đã xử lý từ trước với cùng `Idempotency-Key`
+          description: |
+            Đã xử lý từ trước với cùng `Idempotency-Key`; 0.2.1: hoặc `ban` không đổi gì (`changed: false`; `actionId` null khi tài khoản đã khóa,
+            là mã lần `ban` trong 5 phút qua nếu có)
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ModerationResult" }
@@ -3686,7 +3817,7 @@ components:
         days: { type: integer, enum: [1, 7, 30], description: Chỉ `mute` (bắt buộc). }
         reasonCode: { $ref: "#/components/schemas/ReportReason" }
         note: { type: string, maxLength: 500, description: "Lời giải thích cho người bị xử lý (`warn`, `mute`); không đi vào sự kiện `ban`." }
-        relatedActionId: { type: string, format: uuid, description: Lần xử lý nội dung dẫn tới quyết định này (tùy chọn). }
+        relatedActionId: { type: string, format: uuid, description: "Lần xử lý nội dung dẫn tới quyết định này (tùy chọn). 0.2.1: phải là lần xử lý của chính người bị xử lý, không thì 400." }
 
     ModerationAction:
       type: string
