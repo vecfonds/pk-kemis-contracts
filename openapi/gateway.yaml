@@ -1,9 +1,20 @@
 openapi: 3.1.0
 info:
   title: PkKemis gateway
-  version: 0.1.0
+  version: 0.1.1
   summary: Cửa vào duy nhất từ web (BFF) và trình duyệt tới các service (Spring Cloud Gateway).
   description: |
+    0.1.1 (lát `13g`, sau lượt soát M13; đối chiếu `pk-kemis-gateway` `3323e6d`): chỉ ghi điều gateway **đã trả, đã làm** mà 0.1.0 chưa ghi; không
+    thêm mã lỗi (`Problem.code` vẫn chín giá trị), không bỏ hay đổi nghĩa điều gì:
+    - 413 `payload_too_large` cả ở `GET`, `DELETE` qua API (giới hạn thân áp cho mọi phương thức; khai `Content-Length` quá lớn thì 413 ngay);
+    - 502, 503 (kèm `Retry-After`), 504 ở các tuyến ảnh khi kho (Garage) trả hỏng, không nối được hay chậm;
+    - thùng giới hạn riêng cho `refresh`, `logout` của web khi thiếu `X-Forwarded-For` (`x-rate-limits`, nhóm `bffnoip`); nhóm `auth` luôn theo
+      địa chỉ khách, kể cả khi có token;
+    - header bị bỏ: mọi `X-User-*`, `Cookie`; ở `/realtime/` và các tuyến ảnh thêm `Authorization` và **mọi** `x-amz-*` (URL ký sẵn mang chữ ký
+      trong chuỗi truy vấn);
+    - 503 cũng là mã khi không đọc được JWKS của identity, hay khi tắt cho-qua của kiểm thu hồi (`GATEWAY_REVOCATION_FAIL_OPEN=false`) mà Redis
+      không trả lời.
+
     0.1.0 (docs/backend/M13-GATEWAY-MESSAGING.md, lát `13a`): service mới `pk-kemis-gateway`, Spring Cloud Gateway bản WebFlux (Java 25,
     Spring Boot, Maven; PLAN.md mục 6.2). Hợp đồng này chỉ ghi điều gateway **tự làm** (định tuyến, khóa BFF, kiểm token, chặn token đã thu hồi,
     giới hạn tần suất, header, lỗi riêng của gateway). Thân yêu cầu và phản hồi của từng đường là của hợp đồng service (identity.yaml,
@@ -41,17 +52,32 @@ info:
     yêu cầu không có khóa BFF thì cả `X-Forwarded-*` (rồi tự đặt `X-Forwarded-For` bằng địa chỉ socket). Yêu cầu có khóa BFF giữ nguyên
     `X-Forwarded-For` web đã đặt (địa chỉ thật của khách; identity chặn dò mật khẩu theo đó). Mọi yêu cầu có `X-Request-Id` (giữ của web nếu
     đúng dạng, không thì gateway sinh UUID), trả lại trong phản hồi và ghi log. Log không có `Authorization`, cookie, chuỗi truy vấn của URL ảnh.
+    Từ 0.1.1 ghi rõ thêm: gateway xóa **mọi** header bắt đầu bằng `X-User-` (không chỉ hai cái trên) và `Cookie` ở mọi tuyến (cookie httpOnly
+    của web cũng tới host này vì cookie không phân biệt cổng); ở `/realtime/` và các tuyến ảnh còn xóa `Authorization` và mọi header `x-amz-*`.
+    Chuỗi truy vấn không đổi.
 
     **Giới hạn tần suất** (Redis, `RequestRateLimiter` kiểu thùng token; số mặc định, đổi bằng biến; stack kiểm thử nới ra): người đã đăng nhập
     theo `sub` (15 yêu cầu/giây, dồn tối đa 120); chưa đăng nhập theo địa chỉ khách (5/giây, dồn 30), riêng `/identity/v1/auth/**` (1/giây,
     dồn 20); `/realtime/` theo địa chỉ khách (1 lần bắt tay/giây, dồn 20); ảnh theo địa chỉ khách (10/giây, dồn 60). Quá: 429 `too_many_requests`
-    kèm `Retry-After`. Giới hạn theo nghiệp vụ (lời mời mỗi ngày, tin nhắn mỗi phút…) vẫn ở service.
+    kèm `Retry-After`. Giới hạn theo nghiệp vụ (lời mời mỗi ngày, tin nhắn mỗi phút…) vẫn ở service. Bảng đủ các nhóm ở `x-rate-limits` (0.1.1):
+    - `/identity/v1/auth/**` luôn dùng nhóm `auth` theo địa chỉ khách, **kể cả khi có token hợp lệ** (không dùng thùng theo `sub`).
+    - "Địa chỉ khách" của yêu cầu có khóa BFF là mục đầu của `X-Forwarded-For` nếu đúng dạng địa chỉ IP; thiếu hay sai dạng thì là địa chỉ socket,
+      tức chính máy web. Khi đó `POST /identity/v1/auth/refresh` và `/logout` dùng **một thùng chung riêng** (nhóm `bffnoip`, gấp 10 lần `auth`:
+      mặc định 10/giây, dồn 200) để việc làm mới token của mọi người không chen nhau vào một thùng `auth`, và gateway ghi cảnh báo vào log (web
+      phải luôn gửi `X-Forwarded-For`). Đăng nhập, đăng ký, quên mật khẩu… thiếu header vẫn ở thùng `auth` chặt (theo địa chỉ của web).
 
     **Redis không trả lời:** giới hạn tần suất cho qua; kiểm thu hồi cho qua (token vẫn được kiểm chữ ký và hạn, như trước M13) và ghi log lỗi,
     `/actuator/health` báo `redis: DOWN` (câu hỏi 14 của M13-GATEWAY-MESSAGING.md: cho qua hay chặn).
 
     **Kích thước, thời gian:** thân yêu cầu API tối đa 1 MB (riêng `/learning/v1/admin/**` 16 MB), ảnh 5 MB; quá: 413 `payload_too_large`. Chờ
     service tối đa 20 giây (504 `gateway_timeout`); service không nối được: 503 `service_unavailable`.
+    - Giới hạn thân áp cho **mọi phương thức** của API, kể cả `GET`, `DELETE` (0.1.1). `Content-Length` khai lớn hơn giới hạn: 413 ngay, trước khi
+      kiểm token và giới hạn tần suất (sau khóa BFF: thiếu khóa vẫn là 404), thân không được đọc.
+    - Thân không khai độ dài (chunked) được đếm khi chuyển và bị cắt khi vượt: thường 413; nếu service đã đóng kết nối trước đó thì có thể là 502
+      hay 503. Web luôn gửi `Content-Length`.
+    - Các tuyến ảnh dùng cùng thời gian chờ và cùng mã khi kho không nối được (503 kèm `Retry-After`), chậm (504) hay trả hỏng (502), 0.1.1.
+    - `/realtime/`: gateway nâng cấp WebSocket với trình duyệt **trước** rồi mới nối tới social (Spring Cloud Gateway 5.0), nên social không nối
+      được thì không có mã HTTP: kết nối mở rồi đóng ngay, trình duyệt nối lại theo asyncapi/realtime.yaml.
 
     Mọi lỗi **của gateway** theo RFC 9457 (`application/problem+json`), cùng dạng với các service, `detail` tiếng Việt. Lỗi của service chuyển
     nguyên. Chỉ thêm, không xóa hay đổi nghĩa (README của contracts).
@@ -83,6 +109,22 @@ x-routes:
   - { prefix: /pk-community-media/m/, target: "http://garage:3900/pk-community-media/m/", caller: browser, methods: [GET, HEAD, OPTIONS] }
   - { prefix: /pk-message-media/m/, target: "http://garage:3900/pk-message-media/m/", caller: browser, methods: [GET, HEAD, OPTIONS] }
 
+# Từ 0.1.1: các thùng giới hạn tần suất của gateway (Redis, thùng token của Spring Cloud Gateway; khóa Redis
+# `request_rate_limiter.{<group>.<key>}.tokens|timestamp`, asyncapi/realtime.yaml `x-redis-keys`). `default` là "tốc độ mỗi giây,dồn tối đa".
+# Mỗi yêu cầu rơi vào đúng một nhóm; quá thì 429 `too_many_requests` kèm `Retry-After` (giây, ít nhất 1). Redis không trả lời: cho qua.
+x-rate-limits:
+  - { group: user, key: "sub của token", default: "15,120", env: GATEWAY_RATE_USER, applies: "/<service>/v1/** có token hợp lệ, trừ /identity/v1/auth/**" }
+  - { group: anon, key: "địa chỉ khách", default: "5,30", env: GATEWAY_RATE_ANON, applies: "/<service>/v1/** không có token, trừ /identity/v1/auth/**" }
+  - { group: auth, key: "địa chỉ khách", default: "1,20", env: GATEWAY_RATE_AUTH, applies: "/identity/v1/auth/**, có hay không có token" }
+  - group: bffnoip
+    key: "địa chỉ socket (máy web)"
+    default: "10,200"
+    env: "GATEWAY_RATE_AUTH, nhân 10 cả tốc độ lẫn dồn"
+    applies: "/identity/v1/auth/refresh và /identity/v1/auth/logout có khóa BFF nhưng mục đầu của X-Forwarded-For thiếu hay không phải địa chỉ IP"
+    note: "Một thùng chung cho mọi người đi qua cùng một máy web; gateway ghi cảnh báo mỗi lần. Các đường /identity/v1/auth/** khác vẫn ở `auth`."
+  - { group: rt, key: "địa chỉ socket", default: "1,20", env: GATEWAY_RATE_REALTIME, applies: "bắt tay /realtime/" }
+  - { group: media, key: "địa chỉ socket", default: "10,60", env: GATEWAY_RATE_MEDIA, applies: "mọi tuyến ảnh (tải lên và đọc)" }
+
 paths:
   /{service}/v1/{operationPath}:
     parameters:
@@ -108,6 +150,7 @@ paths:
         "200": { $ref: "#/components/responses/Passthrough" }
         "401": { $ref: "#/components/responses/TokenRejected" }
         "404": { $ref: "#/components/responses/NoRoute" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
         "429": { $ref: "#/components/responses/TooManyRequests" }
         "502": { $ref: "#/components/responses/BadGateway" }
         "503": { $ref: "#/components/responses/ServiceUnavailable" }
@@ -166,6 +209,7 @@ paths:
         "200": { $ref: "#/components/responses/Passthrough" }
         "401": { $ref: "#/components/responses/TokenRejected" }
         "404": { $ref: "#/components/responses/NoRoute" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
         "429": { $ref: "#/components/responses/TooManyRequests" }
         "502": { $ref: "#/components/responses/BadGateway" }
         "503": { $ref: "#/components/responses/ServiceUnavailable" }
@@ -182,6 +226,12 @@ paths:
         cổng công khai của gateway) tới được kho. Gateway chuyển nguyên tới kho S3 (Garage ở máy này), **giữ nguyên `Host`** và đường (chữ ký
         SigV4 tính trên cả hai), không đọc thân. Chỉ `PUT` và `OPTIONS` (CORS do kho trả); thân tối đa 5 MB. Kho kiểm chữ ký, hạn, `Content-Type`,
         `Content-Length`.
+
+        Từ 0.1.1 ghi rõ: gateway **bỏ mọi header `x-amz-*`** trình duyệt gửi kèm (ví dụ `x-amz-copy-source`, `x-amz-acl`, `x-amz-tagging`: URL ký
+        chỉ ký `content-length`, `content-type`, `host`, nên các header không ký đó có thể khiến kho chép một tệp khác mà khóa của app đọc được),
+        cùng `Authorization` và `Cookie`. URL ký sẵn mang chữ ký trong chuỗi truy vấn (`X-Amz-Signature`, `X-Amz-SignedHeaders`…), không bao giờ
+        ở header, nên việc này không làm hỏng URL đúng. Vì vậy social **không được** đưa header `x-amz-*` nào vào `X-Amz-SignedHeaders` của URL
+        ký sẵn (kho sẽ thấy thiếu header đã ký và trả 403). Thời gian chờ và lỗi khi kho không nối được như API: 503 kèm `Retry-After`, 504, 502.
       security: []
       parameters:
         - name: mediaId
@@ -199,7 +249,9 @@ paths:
         "403": { description: "Chữ ký sai, hết hạn, header không khớp (lỗi XML của kho, chuyển nguyên)" }
         "413": { $ref: "#/components/responses/PayloadTooLarge" }
         "429": { $ref: "#/components/responses/TooManyRequests" }
+        "502": { $ref: "#/components/responses/BadGateway" }
         "503": { $ref: "#/components/responses/ServiceUnavailable" }
+        "504": { $ref: "#/components/responses/GatewayTimeout" }
 
   /pk-community-media/m/{mediaId}/{file}:
     get:
@@ -207,7 +259,10 @@ paths:
       operationId: readCommunityImage
       x-slice: 13a
       summary: Đọc một ảnh Cộng đồng bằng URL ký sẵn
-      description: Như `uploadToStore` nhưng chỉ `GET`, `HEAD`, `OPTIONS`. URL do social ký (1 giờ), chỉ cho người được xem ảnh đó.
+      description: |
+        Như `uploadToStore` nhưng chỉ `GET`, `HEAD`, `OPTIONS`. URL do social ký (1 giờ), chỉ cho người được xem ảnh đó. Gateway cũng bỏ mọi header
+        `x-amz-*`, `Authorization`, `Cookie` của trình duyệt (0.1.1). Kho tắt hay chậm: 503 (kèm `Retry-After`), 504 thay cho ảnh (0.1.1); web
+        coi như ảnh không tải được.
       security: []
       parameters:
         - { $ref: "#/components/parameters/MediaId" }
@@ -219,6 +274,9 @@ paths:
             image/webp: { schema: { type: string, format: binary } }
         "403": { description: "Chữ ký sai hay hết hạn (lỗi XML của kho, chuyển nguyên)" }
         "429": { $ref: "#/components/responses/TooManyRequests" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+        "504": { $ref: "#/components/responses/GatewayTimeout" }
 
   /pk-message-media/m/{mediaId}/{file}:
     get:
@@ -226,7 +284,9 @@ paths:
       operationId: readMessageImage
       x-slice: 13a
       summary: Đọc một ảnh của tin nhắn bằng URL ký sẵn
-      description: Như `readCommunityImage`, bucket của tin nhắn (social.yaml 0.3.0). URL chỉ ký cho thành viên đọc được tin đó.
+      description: |
+        Như `readCommunityImage`, bucket của tin nhắn (social.yaml 0.3.0). URL chỉ ký cho thành viên đọc được tin đó. Cùng việc bỏ header
+        (`x-amz-*`, `Authorization`, `Cookie`) và cùng 502, 503, 504 khi kho hỏng (0.1.1).
       security: []
       parameters:
         - { $ref: "#/components/parameters/MediaId" }
@@ -238,6 +298,9 @@ paths:
             image/webp: { schema: { type: string, format: binary } }
         "403": { description: "Chữ ký sai hay hết hạn (lỗi XML của kho, chuyển nguyên)" }
         "429": { $ref: "#/components/responses/TooManyRequests" }
+        "502": { $ref: "#/components/responses/BadGateway" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+        "504": { $ref: "#/components/responses/GatewayTimeout" }
 
 components:
   securitySchemes:
@@ -321,34 +384,53 @@ components:
         application/problem+json:
           schema: { $ref: "#/components/schemas/Problem" }
     TooManyRequests:
-      description: Quá giới hạn tần suất của gateway (`too_many_requests`); chờ theo `Retry-After`
+      description: |
+        Quá giới hạn tần suất của gateway (`too_many_requests`); chờ theo `Retry-After`. Nhóm thùng ở `x-rate-limits`; `Retry-After` là thời gian
+        để có lại một lượt (ít nhất 1 giây).
       headers:
         Retry-After: { $ref: "#/components/headers/RetryAfter" }
       content:
         application/problem+json:
           schema: { $ref: "#/components/schemas/Problem" }
+          examples:
+            quaNhanh:
+              value: { type: about:blank, title: Too Many Requests, status: 429, code: too_many_requests, detail: "Bạn thao tác quá nhanh. Hãy thử lại sau ít giây." }
     PayloadTooLarge:
-      description: Thân yêu cầu quá lớn (`payload_too_large`)
+      description: |
+        Thân yêu cầu quá lớn (`payload_too_large`). Từ 0.1.1 ghi rõ: áp cho mọi phương thức qua API (cả `GET`, `DELETE`); `Content-Length` khai quá
+        giới hạn thì trả ngay, trước khi kiểm token và giới hạn tần suất.
       content:
         application/problem+json:
           schema: { $ref: "#/components/schemas/Problem" }
+          examples:
+            quaLon:
+              value: { type: about:blank, title: Content Too Large, status: 413, code: payload_too_large, detail: "Dữ liệu gửi lên quá lớn." }
     BadGateway:
-      description: Service trả phản hồi hỏng (`bad_gateway`)
+      description: Service (hay kho ảnh, 0.1.1) trả phản hồi hỏng, hay lỗi bất ngờ khi chuyển (`bad_gateway`)
       content:
         application/problem+json:
           schema: { $ref: "#/components/schemas/Problem" }
     ServiceUnavailable:
-      description: Không nối được service (`service_unavailable`); web hiện "Chưa tải được" như khi service tắt trước M13
+      description: |
+        Không nối được service (`service_unavailable`); web hiện "Chưa tải được" như khi service tắt trước M13. Luôn kèm `Retry-After` (5 giây).
+        Từ 0.1.1 ghi rõ ba trường hợp khác cùng mã: kho ảnh (Garage) không nối được ở các tuyến ảnh; yêu cầu có token mà gateway không đọc được JWKS
+        của identity; yêu cầu có token khi `GATEWAY_REVOCATION_FAIL_OPEN=false` mà Redis không trả lời (mặc định là cho qua, câu 14 của M13).
       headers:
         Retry-After: { $ref: "#/components/headers/RetryAfter" }
       content:
         application/problem+json:
           schema: { $ref: "#/components/schemas/Problem" }
+          examples:
+            chuaNoiDuoc:
+              value: { type: about:blank, title: Service Unavailable, status: 503, code: service_unavailable, detail: "Chưa kết nối được máy chủ. Hãy thử lại sau ít giây." }
     GatewayTimeout:
-      description: Service không trả lời trong 20 giây (`gateway_timeout`)
+      description: Service (hay kho ảnh, 0.1.1) không trả lời trong 20 giây (`gateway_timeout`; `GATEWAY_RESPONSE_TIMEOUT`)
       content:
         application/problem+json:
           schema: { $ref: "#/components/schemas/Problem" }
+          examples:
+            quaLau:
+              value: { type: about:blank, title: Gateway Timeout, status: 504, code: gateway_timeout, detail: "Máy chủ phản hồi quá lâu. Hãy thử lại sau." }
 
   schemas:
     Problem:
