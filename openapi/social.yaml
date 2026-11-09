@@ -3086,7 +3086,7 @@ paths:
         Mỗi người kèm `messageBlock` (null là nhắn được; web vẫn hiện người không nhắn được nhưng làm mờ kèm lý do, như bản thử). `q` lọc theo tên
         không dấu trong danh bạ. Người bị khóa và người mình đã chặn không có trong danh bạ (như M10: người chặn không thấy người bị chặn ở đâu);
         người đã chặn mình vẫn có nếu thuộc một nhóm trên, kèm `messages_closed` như người chỉ nhận tin của bạn bè (không lộ việc bị chặn). Người
-        lạ ngoài danh bạ nhắn được từ trang cá nhân của họ (`ProfileView.messageBlock`). Tối đa 200 người, xếp: admin, giáo viên, rồi theo tên.
+        lạ ngoài danh bạ nhắn được từ trang cá nhân của họ (`ProfileView.messageBlock`). Tối đa 200 người, xếp: admin, giáo viên, rồi theo tên. Khi vượt trần thì người có mối liên hệ (bạn bè, cùng lớp, giáo viên hay học sinh của lớp, nhắn gần đây) được giữ trước, admin chỉ lấp chỗ còn lại.
       parameters:
         - name: q
           in: query
